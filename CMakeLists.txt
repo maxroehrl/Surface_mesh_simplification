@@ -1,0 +1,5 @@
+include( polyhedron_demo_macros )
+
+qt5_wrap_ui( mesh_simplification_colorUI_FILES  Mesh_simplification_color_dialog.ui)
+polyhedron_demo_plugin(mesh_simplification_color_plugin Mesh_simplification_color_plugin ${mesh_simplification_colorUI_FILES})
+target_link_libraries(mesh_simplification_color_plugin PUBLIC scene_surface_mesh_item scene_surface_mesh_selection_item)
