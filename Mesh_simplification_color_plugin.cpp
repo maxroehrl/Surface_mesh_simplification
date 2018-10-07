@@ -15,6 +15,7 @@
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_length_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Constrained_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/LindstromTurk_placement.h>
+#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Midpoint_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Bounded_normal_change_placement.h>
 
 typedef Scene_surface_mesh_item Scene_facegraph_item;
@@ -30,10 +31,13 @@ public:
 		: m_and(use_and),
 		m_count_stop(nb_edges),
 		m_length_stop(edge_length) {
-		std::cout << "Simplifying until:" << std::endl
-			<< " * Number of edges = " << nb_edges << std::endl
-			<< (use_and ? " AND " : " OR ") << std::endl
-			<< " * Minimum edge length = " << edge_length << std::endl;
+		std::cout << "\nSimplifying until:" << std::endl
+			<< " * Number of edges = " << nb_edges << std::endl;
+
+		if (edge_length != std::numeric_limits<double>::max()) {
+			std::cout << (use_and ? " AND " : " OR ") << std::endl
+				<< " * Minimum edge length = " << edge_length << std::endl;
+		}
 	}
 
 	template <typename Profile>
@@ -50,7 +54,9 @@ public:
 
 struct Stats {
 	Stats()
-		: collected(0),
+		: same_color(0),
+		different_color(0),
+		collected(0),
 		processed(0),
 		collapsed(0),
 		non_collapsable(0),
@@ -58,6 +64,8 @@ struct Stats {
 		placement_uncomputable(0)
 	{}
 
+	std::size_t same_color;
+	std::size_t different_color;
 	std::size_t collected;
 	std::size_t processed;
 	std::size_t collapsed;
@@ -121,43 +129,38 @@ struct Visitor : CGAL::Surface_mesh_simplification::Edge_collapse_visitor_base<F
 struct Constrained_edge_map {
 	typedef boost::graph_traits<FaceGraph>::edge_descriptor key_type;
 
-	const FaceGraph& m_pmesh;
+	const FaceGraph& pmesh;
+	Stats* stats;
+	bool use_color;
+	bool use_vertex_color;
 	bool has_vcolors;
 	bool has_fcolors;
-	bool use_vertex_color;
-	std::size_t same_color;
-	std::size_t different_color;
 	FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
 	FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
 
-	Constrained_edge_map(const FaceGraph& pmesh)
-		: m_pmesh(pmesh),
+	Constrained_edge_map(const FaceGraph& pmesh, Stats* stats, bool color, bool vcolor)
+		: pmesh(pmesh),
+		stats(stats),
+		use_color(color),
+		use_vertex_color(vcolor),
 		has_vcolors(false),
-		has_fcolors(false),
-		use_vertex_color(true),
-		same_color(0),
-		different_color(0) {
-		tie(vcolors, has_vcolors) = m_pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
-		tie(fcolors, has_fcolors) = m_pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
-
-		//bool has_vsource;
-		//FaceGraph::Property_map<int, bool> vsource;
-		//tie(vsource, has_vsource) = m_pmesh.property_map<int, bool>("v:source");
-		//use_vertex_color = vsource[0];
-
-		std::cout << "Has vertex color: " << has_vcolors << std::endl
-			<< "Has face color: " << has_fcolors << std::endl;
+		has_fcolors(false) {
+		tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
+		tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
 	}
 
 	friend bool get(Constrained_edge_map map, const key_type& edge) {
-		auto v1 = map.m_pmesh.vertex(edge, 0);
-		auto v2 = map.m_pmesh.vertex(edge, 1);
+		if (!map.use_color)
+			return false;
+
+		auto v1 = map.pmesh.vertex(edge, 0);
+		auto v2 = map.pmesh.vertex(edge, 1);
 		CGAL::Color c1;
 		CGAL::Color c2;
 
 		if (map.has_fcolors && !map.use_vertex_color) {
-			auto f1 = map.m_pmesh.face(map.m_pmesh.halfedge(v1));
-			auto f2 = map.m_pmesh.face(map.m_pmesh.halfedge(v2));
+			auto f1 = map.pmesh.face(map.pmesh.halfedge(v1));
+			auto f2 = map.pmesh.face(map.pmesh.halfedge(v2));
 			c1 = map.fcolors[f1];
 			c2 = map.fcolors[f2];
 		}
@@ -167,9 +170,9 @@ struct Constrained_edge_map {
 		}
 
 		if (c1 == c2)
-			map.same_color++;
+			map.stats->same_color++;
 		else
-			map.different_color++;
+			map.stats->different_color++;
 		return c1 == c2;
 	}
 };
@@ -209,7 +212,7 @@ private:
 }; // end Polyhedron_demo_mesh_simplification_color_plugin
 
 void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_triggered() {
-	const CGAL::Three::Scene_interface::Item_id index = scene->mainSelectionIndex();
+	const int index = scene->mainSelectionIndex();
 	auto poly_item = qobject_cast<Scene_facegraph_item*>(scene->item(index));
 	auto selection_item = qobject_cast<Scene_polyhedron_selection_item*>(scene->item(index));
 
@@ -223,16 +226,31 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		connect(ui.buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
 		connect(ui.buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
 
-		CGAL::Three::Scene_interface::Bbox bbox = poly_item != nullptr ? poly_item->bbox()
+		auto bbox = poly_item != nullptr ? poly_item->bbox()
 			: selection_item != nullptr ? selection_item->bbox() : scene->bbox();
 
 		double diago_length = CGAL::sqrt((bbox.xmax() - bbox.xmin())*(bbox.xmax() - bbox.xmin())
 			+ (bbox.ymax() - bbox.ymin())*(bbox.ymax() - bbox.ymin()) +
 			(bbox.zmax() - bbox.zmin())*(bbox.zmax() - bbox.zmin()));
 
-		ui.m_nb_edges->setValue((int)(num_halfedges(pmesh) / 4));
-		ui.m_nb_edges->setMaximum((int)num_halfedges(pmesh));
+		ui.m_nb_edges->setValue((int) (num_halfedges(pmesh) / 4));
+		ui.m_nb_edges->setMaximum((int) num_halfedges(pmesh));
 		ui.m_edge_length->setValue(diago_length * 0.05);
+		
+		bool has_vcolors = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color").second;
+		bool has_fcolors = pmesh.property_map<face_descriptor, CGAL::Color>("f:color").second;
+		if (has_vcolors)
+			ui.m_source->addItem("Vertex");
+		if (has_fcolors)
+			ui.m_source->addItem("Face");
+		if (!has_vcolors && !has_fcolors) {
+			ui.m_source->setEnabled(false);
+			ui.m_use_source->setChecked(false);
+			ui.m_use_source->setEnabled(false);
+		}
+
+		std::cout << "\nHas vertex color: " << std::boolalpha << has_vcolors << std::endl
+			<< "Has face color: " << has_fcolors << std::endl;
 
 		// check user cancellation
 		if (dialog.exec() == QDialog::Rejected)
@@ -241,44 +259,33 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		// simplify
 		QTime time;
 		time.start();
-		std::cout << "Simplify..." << std::endl;
 		QApplication::setOverrideCursor(Qt::WaitCursor);
 		QApplication::processEvents();
+
+		namespace SMS = CGAL::Surface_mesh_simplification;
+		// TODO Runtime typedefs
+		//typedef std::conditional<true, SMS::Midpoint_placement<FaceGraph>, SMS::LindstromTurk_placement<FaceGraph>> PlacementBase;
+		//typedef std::conditional<false, SMS::Bounded_normal_change_placement<PlacementBase>, PlacementBase> Placement;
+		typedef SMS::Midpoint_placement<FaceGraph> PlacementBase;
+		typedef SMS::Bounded_normal_change_placement<PlacementBase> Placement;
+		typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
+
+		Stats stats;
+		Visitor visitor(&stats);
+		Constrained_edge_map bem(pmesh, &stats, ui.m_use_source->isChecked(), ui.m_source->currentIndex() == 0);
 		Custom_stop_predicate stop(
 			ui.m_combinatorial->currentIndex() == 0 && !ui.m_use_nb_edges->isChecked() && !ui.m_use_edge_length->isChecked(),
 			ui.m_use_nb_edges->isChecked() ? ui.m_nb_edges->value() : 0,
 			ui.m_use_edge_length->isChecked() ? ui.m_edge_length->value() : std::numeric_limits<double>::max()
 		);
+		edge_collapse(pmesh, stop, CGAL::parameters::vertex_index_map(get(boost::vertex_index, pmesh))
+			.edge_is_constrained_map(bem)
+			.get_placement(ConstrainedPlacement(bem))
+			.visitor(visitor));
 
-		Stats stats;
-		Visitor visitor(&stats);
-
-		if (selection_item) {
-			CGAL::Surface_mesh_simplification::Constrained_placement
-				<CGAL::Surface_mesh_simplification::Bounded_normal_change_placement
-				<CGAL::Surface_mesh_simplification::LindstromTurk_placement
-				<FaceGraph> >,
-				Scene_polyhedron_selection_item::Is_constrained_map
-				<Scene_polyhedron_selection_item::Selection_set_edge> >
-				placement(selection_item->constrained_edges_pmap());
-
-			edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(selection_item->constrained_edges_pmap()).get_placement(placement).visitor(visitor));
-		}
-		else {
-			//bool created;
-			//FaceGraph::Property_map<int, bool> vsource;
-			//tie(vsource, created) = pmesh.add_property_map<int, bool>("v:source", ui.m_source->currentIndex() == 0);
-			
-			CGAL::Surface_mesh_simplification::Constrained_placement
-				<CGAL::Surface_mesh_simplification::Bounded_normal_change_placement
-				<CGAL::Surface_mesh_simplification::LindstromTurk_placement
-				<FaceGraph> >,
-				Constrained_edge_map> placement(pmesh);
-
-			edge_collapse(pmesh, stop, CGAL::parameters::vertex_index_map(get(boost::vertex_index, pmesh)).get_placement(placement).visitor(visitor));
-
-			std::cout << "\nSame color: " << placement.Edge_is_constrained_map.same_color << std::endl
-				<< "Different color: " << placement.Edge_is_constrained_map.different_color << std::endl;
+		if (ui.m_use_source->isChecked()) {
+			std::cout << "\nSame color: " << stats.same_color << std::endl
+				<< "Different color: " << stats.different_color << std::endl;
 		}
 		std::cout << "\nEdges collected: " << stats.collected << std::endl
 			<< "Edges processed: " << stats.processed << std::endl

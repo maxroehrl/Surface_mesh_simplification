@@ -7,7 +7,7 @@
         <x>0</x>
         <y>0</y>
         <width>311</width>
-        <height>171</height>
+        <height>250</height>
       </rect>
     </property>
     <property name="windowTitle">
@@ -120,7 +120,7 @@
         </layout>
       </item>
       <item>
-        <spacer name="verticalSpacer">
+        <spacer name="verticalSpacer_2">
           <property name="orientation">
             <enum>Qt::Vertical</enum>
           </property>
@@ -133,21 +133,38 @@
         </spacer>
       </item>
       <item>
-        <widget class="QComboBox" name="m_source">
-          <property name="enabled">
-            <bool>true</bool>
+        <layout class="QHBoxLayout" name="horizontalLayout_4">
+          <item>
+            <widget class="QCheckBox" name="m_use_source">
+              <property name="checked">
+                <bool>true</bool>
+              </property>
+              <property name="text">
+                <string>Color source:</string>
+              </property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QComboBox" name="m_source">
+              <property name="enabled">
+                <bool>true</bool>
+              </property>
+            </widget>
+          </item>
+        </layout>
+      </item>
+      <item>
+        <spacer name="verticalSpacer">
+          <property name="orientation">
+            <enum>Qt::Vertical</enum>
           </property>
-          <item>
-            <property name="text">
-              <string>Vertex color</string>
-            </property>
-          </item>
-          <item>
-            <property name="text">
-              <string>Face color</string>
-            </property>
-          </item>
-        </widget>
+          <property name="sizeHint" stdset="0">
+            <size>
+              <width>20</width>
+              <height>40</height>
+            </size>
+          </property>
+        </spacer>
       </item>
       <item>
         <widget class="QDialogButtonBox" name="buttonBox">
