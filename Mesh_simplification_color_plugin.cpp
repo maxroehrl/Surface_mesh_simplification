@@ -18,6 +18,8 @@
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Midpoint_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Bounded_normal_change_placement.h>
 
+namespace SMS = CGAL::Surface_mesh_simplification;
+
 typedef Scene_surface_mesh_item Scene_facegraph_item;
 typedef Scene_facegraph_item::Face_graph FaceGraph;
 
@@ -135,16 +137,18 @@ struct Constrained_edge_map {
 	bool use_vertex_color;
 	bool has_vcolors;
 	bool has_fcolors;
+	int threshold;
 	FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
 	FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
 
-	Constrained_edge_map(const FaceGraph& pmesh, Stats* stats, bool color, bool vcolor)
+	Constrained_edge_map(const FaceGraph& pmesh, Stats* stats, bool color, bool vcolor, int threshold)
 		: pmesh(pmesh),
 		stats(stats),
 		use_color(color),
 		use_vertex_color(vcolor),
 		has_vcolors(false),
-		has_fcolors(false) {
+		has_fcolors(false),
+		threshold(threshold) {
 		tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
 		tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
 	}
@@ -174,11 +178,10 @@ struct Constrained_edge_map {
 		else
 			map.stats->different_color++;
 
-		int threshold = 50;
 		int r = c1.red() - c2.red();
 		int g = c1.green() - c2.green();
 		int b = c1.blue() - c2.blue();
-		return r*r + g*g + b*b >= threshold*threshold;
+		return r*r + g*g + b*b > map.threshold*map.threshold;
 	}
 };
 
@@ -241,6 +244,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		ui.m_nb_edges->setValue((int) (num_halfedges(pmesh) / 4));
 		ui.m_nb_edges->setMaximum((int) num_halfedges(pmesh));
 		ui.m_edge_length->setValue(diago_length * 0.05);
+		ui.m_color_threshold->setValue(50);
 		
 		bool has_vcolors = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color").second;
 		bool has_fcolors = pmesh.property_map<face_descriptor, CGAL::Color>("f:color").second;
@@ -267,26 +271,55 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		QApplication::setOverrideCursor(Qt::WaitCursor);
 		QApplication::processEvents();
 
-		namespace SMS = CGAL::Surface_mesh_simplification;
-		// TODO Runtime typedefs
-		//typedef std::conditional<true, SMS::Midpoint_placement<FaceGraph>, SMS::LindstromTurk_placement<FaceGraph>> PlacementBase;
-		//typedef std::conditional<false, SMS::Bounded_normal_change_placement<PlacementBase>, PlacementBase> Placement;
-		typedef SMS::Midpoint_placement<FaceGraph> PlacementBase;
-		typedef SMS::Bounded_normal_change_placement<PlacementBase> Placement;
-		typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-
 		Stats stats;
 		Visitor visitor(&stats);
-		Constrained_edge_map bem(pmesh, &stats, ui.m_use_source->isChecked(), ui.m_source->currentIndex() == 0);
+		Constrained_edge_map bem(pmesh, &stats,
+			ui.m_use_source->isChecked(),
+			ui.m_source->currentIndex() == 0,
+			ui.m_color_threshold->value()
+		);
 		Custom_stop_predicate stop(
 			ui.m_combinatorial->currentIndex() == 0 && !ui.m_use_nb_edges->isChecked() && !ui.m_use_edge_length->isChecked(),
 			ui.m_use_nb_edges->isChecked() ? ui.m_nb_edges->value() : 0,
 			ui.m_use_edge_length->isChecked() ? ui.m_edge_length->value() : std::numeric_limits<double>::max()
 		);
-		edge_collapse(pmesh, stop, CGAL::parameters::vertex_index_map(get(boost::vertex_index, pmesh))
-			.edge_is_constrained_map(bem)
-			.get_placement(ConstrainedPlacement(bem))
-			.visitor(visitor));
+
+		if (ui.m_base_placement->currentIndex() == 0) {
+			typedef SMS::LindstromTurk_placement<FaceGraph> BasePlacement;
+
+			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
+				typedef SMS::Bounded_normal_change_placement<BasePlacement> Placement;
+				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
+				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
+					.get_placement(ConstrainedPlacement(bem))
+					.visitor(visitor));
+			}
+			else {
+				typedef BasePlacement Placement;
+				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
+				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
+					.get_placement(ConstrainedPlacement(bem))
+					.visitor(visitor));
+			}
+		}
+		else if (ui.m_base_placement->currentIndex() == 1) {
+			typedef SMS::Midpoint_placement<FaceGraph> BasePlacement;
+
+			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
+				typedef SMS::Bounded_normal_change_placement<BasePlacement> Placement;
+				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
+				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
+					.get_placement(ConstrainedPlacement(bem))
+					.visitor(visitor));
+			}
+			else {
+				typedef BasePlacement Placement;
+				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
+				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
+					.get_placement(ConstrainedPlacement(bem))
+					.visitor(visitor));
+			}
+		}
 
 		if (ui.m_use_source->isChecked()) {
 			std::cout << "\nSame color: " << stats.same_color << std::endl
