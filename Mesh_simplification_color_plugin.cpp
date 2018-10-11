@@ -173,7 +173,12 @@ struct Constrained_edge_map {
 			map.stats->same_color++;
 		else
 			map.stats->different_color++;
-		return c1 == c2;
+
+		int threshold = 50;
+		int r = c1.red() - c2.red();
+		int g = c1.green() - c2.green();
+		int b = c1.blue() - c2.blue();
+		return r*r + g*g + b*b >= threshold*threshold;
 	}
 };
 
