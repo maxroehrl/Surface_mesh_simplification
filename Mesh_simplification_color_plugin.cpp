@@ -7,6 +7,8 @@
 #include <QTime>
 #include <QAction>
 
+#include <boost/foreach.hpp>
+
 #include <CGAL/Three/Polyhedron_demo_plugin_interface.h>
 #include <CGAL/Surface_mesh_simplification/HalfedgeGraph_Polyhedron_3.h>
 #include <CGAL/Surface_mesh_simplification/edge_collapse.h>
@@ -245,8 +247,36 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		ui.m_edge_length->setValue(diago_length * 0.05);
 		ui.m_color_threshold->setValue(50);
 		
-		bool has_vcolors = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color").second;
-		bool has_fcolors = pmesh.property_map<face_descriptor, CGAL::Color>("f:color").second;
+		bool has_vcolors; 
+		bool has_fcolors;
+		FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
+		FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
+		tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
+		tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
+
+		if (!has_fcolors && has_vcolors) {
+			std::cout << "\nAdding face colors..." << std::endl;
+			pmesh.add_property_map<face_descriptor, CGAL::Color>("f:color", CGAL::Color(0, 0, 0));
+			tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
+
+			BOOST_FOREACH(FaceGraph::Face_index f, pmesh.faces()) {
+				unsigned int r = 0, g = 0, b = 0;
+				BOOST_FOREACH(FaceGraph::Vertex_index v, CGAL::vertices_around_face(pmesh.halfedge(f), pmesh)) {
+					CGAL::Color c = vcolors[v];
+					r += c.red() * c.red();
+					g += c.green() * c.green();
+					b += c.blue() * c.blue();
+				}
+				CGAL::Color fcolor(
+					static_cast<unsigned char>(sqrt(r / 3)),
+					static_cast<unsigned char>(sqrt(g / 3)),
+					static_cast<unsigned char>(sqrt(b / 3))
+				);
+				fcolors[f] = fcolor;
+			}
+			std::cout << "Face colors were added..." << std::endl;
+		}
+
 		if (has_vcolors)
 			ui.m_source->addItem("Vertex");
 		if (has_fcolors)
