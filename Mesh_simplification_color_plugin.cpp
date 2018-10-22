@@ -186,6 +186,258 @@ struct Constrained_edge_map {
 	}
 };
 
+class ColorConstrainedSimplification {
+public:
+	typedef FaceGraph TM;
+	typedef boost::detail::choose_impl_result<boost::mpl::true_, Graph, Param, PropertyTag>::type VertexPointMap;
+	typedef CGAL::Surface_mesh_simplification::Edge_profile<TM, VertexPointMap> Profile;
+	typedef boost::graph_traits<TM> GraphTraits;
+	typedef GraphTraits::vertex_descriptor      vertex_descriptor;
+	typedef GraphTraits::vertex_iterator        vertex_iterator;
+	typedef GraphTraits::halfedge_descriptor    halfedge_descriptor;
+	typedef GraphTraits::halfedge_iterator      halfedge_iterator;
+	typedef CGAL::Halfedge_around_source_iterator<TM> out_edge_iterator;
+	typedef CGAL::Halfedge_around_target_iterator<TM> in_edge_iterator;
+	typedef GraphTraits::traversal_category     traversal_category;
+	typedef GraphTraits::edges_size_type        size_type;
+	typedef GraphTraits::edge_iterator          edge_iterator;
+
+	typedef VertexPointMap Vertex_point_pmap;
+	typedef boost::property_traits<Vertex_point_pmap>::value_type Point;
+	typedef Kernel_traits<Point>::Kernel Traits;
+	typedef Traits::Equal_3 Equal_3;
+	typedef Traits::Vector_3 Vector;
+	typedef Traits::FT FT;
+
+	typedef boost::optional<FT> Cost_type;
+	typedef boost::optional<Point> Placement_type;
+	typedef ColorConstrainedSimplification Self;
+
+	struct Compare_cost{
+		Compare_cost() : mAlgorithm(nullptr) {}
+
+		Compare_cost(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
+
+		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const{
+			// NOTE: A cost is an optional<> value.
+			// Absent optionals are ordered first; that is, "none < T" and "T > none" for any defined T != none.
+			// In consequence, edges with undefined costs will be promoted to the top of the priority queue and poped out first.
+			return mAlgorithm->get_data(a).cost() < mAlgorithm->get_data(b).cost();
+		}
+
+		Self const* mAlgorithm;
+	};
+
+	struct edge_id : boost::put_get_helper<size_type, edge_id> {
+		edge_id() : mAlgorithm(0) {}
+
+		edge_id(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
+
+		size_type operator[] (halfedge_descriptor const& e) const {
+			return mAlgorithm->get_edge_id(e);
+		}
+
+		Self const* mAlgorithm;
+	};
+
+	typedef CGAL::Modifiable_priority_queue<halfedge_descriptor, Compare_cost, edge_id> PQ;
+	typedef PQ::handle pq_handle;
+
+	// An Edge_data is associated with EVERY _ edge in the mesh (collapseable or not).
+	// It relates the edge with the PQ-handle needed to update the priority queue
+	// It also relates the edge with a policy-based cache
+	class Edge_data {
+	public:
+		Edge_data() : mPQHandle() {}
+
+		Cost_type const& cost() const { return mCost; }
+		Cost_type      & cost() { return mCost; }
+
+		pq_handle PQ_handle() const { return mPQHandle; }
+
+		bool is_in_PQ() const { return mPQHandle != PQ::null_handle(); }
+
+		void set_PQ_handle(pq_handle h) { mPQHandle = h; }
+
+		void reset_PQ_handle() { mPQHandle = PQ::null_handle(); }
+
+	private:
+		Cost_type mCost;
+		pq_handle mPQHandle;
+	};
+
+	typedef Edge_data* Edge_data_ptr;
+	typedef boost::scoped_array<Edge_data> Edge_data_array;
+
+	ColorConstrainedSimplification(TM aSurface)
+		: mSurface(aSurface)
+		, m_has_border(false) {
+		const FT cMaxDihedralAngleCos = std::cos(1.0 * CGAL_PI / 180.0);
+		mcMaxDihedralAngleCos2 = cMaxDihedralAngleCos * cMaxDihedralAngleCos;
+
+		halfedge_iterator eb, ee;
+		for (boost::tie(eb, ee) = halfedges(mSurface); eb != ee; ++eb) {
+			halfedge_descriptor ed = *eb;
+			if (is_border(ed)) {
+				m_has_border = true;
+				break;
+			}
+		}
+	}
+
+	void simplify() {
+		// Loop over all the _undirected_ edges in the surface putting them in the PQ
+		Equal_3 equal_points = Traits().equal_3_object();
+		size_type lSize = num_edges(mSurface);
+		mInitialEdgeCount = mCurrentEdgeCount = static_cast<size_type>(
+			std::distance(boost::begin(edges(mSurface)), boost::end(edges(mSurface))));;
+
+		mEdgeDataArray.reset(new Edge_data[lSize]);
+
+		mPQ.reset(new PQ(lSize, Compare_cost(this), edge_id(this)));
+
+		std::size_t id = 0;
+		std::set<halfedge_descriptor> zero_length_edges;
+
+		edge_iterator eb, ee;
+		for (boost::tie(eb, ee) = edges(mSurface); eb != ee; ++eb, id += 2) {
+			halfedge_descriptor lEdge = halfedge(*eb, mSurface);
+
+			if (is_constrained(lEdge))
+				continue; //no not insert constrained edges
+
+			Profile const& lProfile = create_profile(lEdge);
+			if (!equal_points(lProfile.p0(), lProfile.p1())) {
+				Edge_data& lData = get_data(lEdge);
+
+				lData.cost() = Get_cost(lProfile);
+				insert_in_PQ(lEdge, lData);
+			}
+			else {
+				zero_length_edges.insert(primary_edge(lEdge));
+			}
+		}
+
+		for (auto it = zero_length_edges.begin(), it_end = zero_length_edges.end(); it != it_end; ++it) {
+			Profile const& lProfile = create_profile(*it);
+
+			if (!Is_collapse_topologically_valid(lProfile))
+				continue;
+
+			// edges of length 0 removed no longer need to be treated
+			if (lProfile.left_face_exists()) {
+				halfedge_descriptor lEdge_to_remove = is_constrained(lProfile.vL_v0()) ?
+					primary_edge(lProfile.v1_vL()) :
+					primary_edge(lProfile.vL_v0());
+				zero_length_edges.erase(lEdge_to_remove);
+				Edge_data& lData = get_data(lEdge_to_remove);
+				if (lData.is_in_PQ()) {
+					remove_from_PQ(lEdge_to_remove, lData);
+				}
+				--mCurrentEdgeCount;
+			}
+
+			if (lProfile.right_face_exists()) {
+				halfedge_descriptor lEdge_to_remove = is_constrained(lProfile.vR_v1()) ?
+					primary_edge(lProfile.v0_vR()) :
+					primary_edge(lProfile.vR_v1());
+				zero_length_edges.erase(lEdge_to_remove);
+				Edge_data& lData = get_data(lEdge_to_remove);
+				if (lData.is_in_PQ()) {
+					remove_from_PQ(lEdge_to_remove, lData);
+				}
+				--mCurrentEdgeCount;
+			}
+
+			--mCurrentEdgeCount;
+
+			//the placement is trivial, it's always the point itself
+			Placement_type lPlacement = lProfile.p0();
+			vertex_descriptor rResult = halfedge_collapse_bk_compatibility(lProfile.v0_v1(), Edge_is_constrained_map);
+			put(Vertex_point_map, rResult, *lPlacement);
+		}
+
+		// Pops and processes each edge from the PQ
+		boost::optional<halfedge_descriptor> lEdge;
+		while ((lEdge = pop_from_PQ())) {
+			Profile const& lProfile = create_profile(*lEdge);
+			Cost_type lCost = get_data(*lEdge).cost();
+
+			if (lCost) {
+				if (Should_stop(*lCost, lProfile, mInitialEdgeCount, mCurrentEdgeCount)) {
+					//Visitor.OnStopConditionReached(lProfile);
+					break;
+				}
+
+				if (Is_collapse_topologically_valid(lProfile)) {
+					// The external function Get_new_vertex_point() is allowed to return an absent point if there is no way to place the vertex
+					// satisfying its constraints. In that case the remaining vertex is simply left unmoved.
+					Placement_type lPlacement = Get_placement(lProfile);
+
+					if (Is_collapse_geometrically_valid(lProfile, lPlacement)) {
+						Collapse(lProfile, lPlacement);
+					}
+				}
+				else {
+					//Visitor.OnNonCollapsable(lProfile);
+				}
+			}
+		}
+	}
+private:
+	Profile create_profile(halfedge_descriptor const& aEdge) {
+		return Profile(aEdge, mSurface, Vertex_index_map, Vertex_point_map, Edge_index_map, m_has_border);
+	}
+
+	bool is_constrained(halfedge_descriptor const& aEdge) const {
+		return get(Edge_is_constrained_map, edge(aEdge, mSurface));
+	}
+
+	size_type get_halfedge_id(halfedge_descriptor const& aEdge) const{
+		return Edge_index_map[aEdge];
+	}
+
+	size_type get_edge_id(halfedge_descriptor const& aEdge) const {
+		return get_halfedge_id(aEdge) / 2;
+	}
+
+	Edge_data& get_data(halfedge_descriptor const& aEdge) const {
+		return mEdgeDataArray[get_edge_id(aEdge)];
+	}
+
+	void insert_in_PQ(halfedge_descriptor const& aEdge, Edge_data& aData) {
+		aData.set_PQ_handle(mPQ->push(aEdge));
+	}
+
+	void remove_from_PQ(halfedge_descriptor const& aEdge, Edge_data& aData) {
+		aData.set_PQ_handle(mPQ->erase(aEdge, aData.PQ_handle()));
+	}
+
+	boost::optional<halfedge_descriptor> pop_from_PQ() {
+		boost::optional<halfedge_descriptor> rEdge = mPQ->extract_top();
+		if (rEdge){
+			get_data(*rEdge).reset_PQ_handle();
+		}
+		return rEdge;
+	}
+
+	TM&                  mSurface;
+	ShouldStop           const& Should_stop;
+	VertexIndexMap       const& Vertex_index_map;
+	VertexPointMap       const& Vertex_point_map;
+	EdgeIndexMap         const& Edge_index_map;
+	EdgeIsConstrainedMap const& Edge_is_constrained_map;
+	GetCost              const& Get_cost;
+	GetPlacement         const& Get_placement;
+	VisitorT                    Visitor;
+	bool                        m_has_border;
+	Edge_data_array mEdgeDataArray;
+	boost::scoped_ptr<PQ> mPQ;
+	size_type mInitialEdgeCount;
+	size_type mCurrentEdgeCount;
+	FT mcMaxDihedralAngleCos2;
+};
+
 class Polyhedron_demo_mesh_simplification_color_plugin :
 	public QObject,
 	public CGAL::Three::Polyhedron_demo_plugin_interface {
