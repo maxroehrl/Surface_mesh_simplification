@@ -26,8 +26,8 @@ typedef Scene_facegraph_item::Face_graph FaceGraph;
 
 class Custom_stop_predicate {
 	bool m_and;
-	CGAL::Surface_mesh_simplification::Count_stop_predicate<FaceGraph> m_count_stop;
-	CGAL::Surface_mesh_simplification::Edge_length_stop_predicate<double> m_length_stop;
+	SMS::Count_stop_predicate<FaceGraph> m_count_stop;
+	SMS::Edge_length_stop_predicate<double> m_length_stop;
 
 public:
 	Custom_stop_predicate(bool use_and, std::size_t nb_edges, double edge_length)
@@ -76,11 +76,11 @@ struct Stats {
 	std::size_t placement_uncomputable;
 };
 
-struct Visitor : CGAL::Surface_mesh_simplification::Edge_collapse_visitor_base<FaceGraph> {
+struct Visitor : SMS::Edge_collapse_visitor_base<FaceGraph> {
 	typedef GraphTraits::edges_size_type size_type;
 	typedef GraphTraits::vertex_descriptor vertex_descriptor;
 	typedef boost::property_map<FaceGraph, CGAL::vertex_point_t>::type Vertex_point_pmap;
-	typedef CGAL::Surface_mesh_simplification::Edge_profile<FaceGraph> Profile;
+	typedef SMS::Edge_profile<FaceGraph> Profile;
 	typedef boost::property_traits<Vertex_point_pmap>::value_type Point;
 
 	Stats* stats;
@@ -202,7 +202,7 @@ public:
 	
 	typedef boost::lazy_disable_if<boost::is_const<CGAL::Point_3<CGAL::Epick>>, CGAL::internal::
 		Get_vertex_point_map_for_Surface_mesh_return_type<CGAL::Point_3<CGAL::Epick>>>::type VertexPointMap;
-	typedef CGAL::Surface_mesh_simplification::Edge_profile<TM, VertexPointMap> Profile;
+	typedef SMS::Edge_profile<TM, VertexPointMap> Profile;
 	typedef VertexPointMap Vertex_point_pmap;
 	typedef boost::property_traits<Vertex_point_pmap>::value_type Point;
 
@@ -291,8 +291,8 @@ public:
 //		, VertexPointMap        const& aVertex_point_map
 //		, EdgeIndexMap          const& aEdge_index_map
 		, EdgeIsConstrainedMap& aEdge_is_constrained_map
-//		, CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM> const& aGet_cost
-//		, CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM> const& aGet_placement
+//		, SMS::LindstromTurk_cost<TM> const& aGet_cost
+//		, SMS::LindstromTurk_placement<TM> const& aGet_placement
 //		, VisitorT              aVisitor
 	)
 		: mSurface(aSurface)
@@ -301,14 +301,14 @@ public:
 		, Vertex_point_map(get(boost::vertex_point, mSurface))
 		, Edge_index_map(get(boost::halfedge_index, mSurface))
 		, Edge_is_constrained_map(aEdge_is_constrained_map)
-		, Get_cost(CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM>())
-		, Get_placement(CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM>())
-//		, m_has_border(false)
+		, Get_cost(SMS::LindstromTurk_cost<TM>())
+		, Get_placement(SMS::LindstromTurk_placement<TM>())
+		, m_has_border(false)
 	{
 		const FT cMaxDihedralAngleCos = std::cos(1.0 * CGAL_PI / 180.0);
 		mcMaxDihedralAngleCos2 = cMaxDihedralAngleCos * cMaxDihedralAngleCos;
-		//Get_cost = CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM>();
-		//Get_placement = CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM>();
+		//Get_cost = SMS::LindstromTurk_cost<TM>();
+		//Get_placement = SMS::LindstromTurk_placement<TM>();
 		//Vertex_point_map = get(boost::vertex_point, mSurface);
 		//Edge_index_map = get(boost::halfedge_index, mSurface);
 
@@ -854,8 +854,8 @@ private:
 	VertexPointMap& Vertex_point_map;
 	CGAL::SM_index_pmap<CGAL::Point_3<CGAL::Epick>, CGAL::SM_Halfedge_index>& Edge_index_map;
 	EdgeIsConstrainedMap& Edge_is_constrained_map;
-	CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM>& Get_cost;
-	CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM>& Get_placement;
+	SMS::LindstromTurk_cost<TM>& Get_cost;
+	SMS::LindstromTurk_placement<TM>& Get_placement;
 	//VisitorT Visitor;
 	bool m_has_border;
 	Edge_data_array mEdgeDataArray;
