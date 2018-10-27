@@ -64,8 +64,7 @@ struct Stats {
 		collapsed(0),
 		non_collapsable(0),
 		cost_uncomputable(0),
-		placement_uncomputable(0)
-	{}
+		placement_uncomputable(0) {}
 
 	std::size_t same_color;
 	std::size_t different_color;
@@ -168,8 +167,7 @@ struct Constrained_edge_map {
 			auto f2 = map.pmesh.face(map.pmesh.halfedge(v2));
 			c1 = map.fcolors[f1];
 			c2 = map.fcolors[f2];
-		}
-		else if (map.has_vcolors) {
+		} else if (map.has_vcolors) {
 			c1 = map.vcolors[v1];
 			c2 = map.vcolors[v2];
 		}
@@ -182,15 +180,14 @@ struct Constrained_edge_map {
 		int r = c1.red() - c2.red();
 		int g = c1.green() - c2.green();
 		int b = c1.blue() - c2.blue();
-		return r*r + g*g + b*b > map.threshold*map.threshold;
+		return r * r + g * g + b * b > map.threshold*map.threshold;
 	}
 };
 
 class ColorConstrainedSimplification {
 public:
 	typedef FaceGraph TM;
-	typedef boost::associative_property_map<boost::vertex_point_t> VertexPointMap;
-	typedef CGAL::Surface_mesh_simplification::Edge_profile<TM, VertexPointMap> Profile;
+
 	typedef boost::graph_traits<TM> GraphTraits;
 	typedef GraphTraits::vertex_descriptor      vertex_descriptor;
 	typedef GraphTraits::vertex_iterator        vertex_iterator;
@@ -202,9 +199,14 @@ public:
 	typedef GraphTraits::edges_size_type        size_type;
 	typedef GraphTraits::edge_iterator          edge_iterator;
 
+	
+	typedef boost::lazy_disable_if<boost::is_const<CGAL::Point_3<CGAL::Epick>>, CGAL::internal::
+		Get_vertex_point_map_for_Surface_mesh_return_type<CGAL::Point_3<CGAL::Epick>>>::type VertexPointMap;
+	typedef CGAL::Surface_mesh_simplification::Edge_profile<TM, VertexPointMap> Profile;
 	typedef VertexPointMap Vertex_point_pmap;
 	typedef boost::property_traits<Vertex_point_pmap>::value_type Point;
-	typedef CGAL::Kernel_traits<Point>::Kernel Traits;
+
+	typedef Kernel Traits;
 	typedef Traits::Equal_3 Equal_3;
 	typedef Traits::Vector_3 Vector;
 	typedef Traits::FT FT;
@@ -215,12 +217,24 @@ public:
 
 	typedef Constrained_edge_map EdgeIsConstrainedMap;
 
-	struct Compare_cost{
+	struct Compare_id {
+		Compare_id() : mAlgorithm(0) {}
+
+		Compare_id(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
+
+		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const {
+			return mAlgorithm->get_halfedge_id(a) < mAlgorithm->get_halfedge_id(b);
+		}
+
+		Self const* mAlgorithm;
+	};
+
+	struct Compare_cost {
 		Compare_cost() : mAlgorithm(nullptr) {}
 
 		Compare_cost(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
 
-		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const{
+		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const {
 			// NOTE: A cost is an optional<> value.
 			// Absent optionals are ordered first; that is, "none < T" and "T > none" for any defined T != none.
 			// In consequence, edges with undefined costs will be promoted to the top of the priority queue and poped out first.
@@ -231,7 +245,7 @@ public:
 	};
 
 	struct edge_id : boost::put_get_helper<size_type, edge_id> {
-		edge_id() : mAlgorithm(0) {}
+		edge_id() : mAlgorithm(nullptr) {}
 
 		edge_id(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
 
@@ -271,11 +285,32 @@ public:
 	typedef Edge_data* Edge_data_ptr;
 	typedef boost::scoped_array<Edge_data> Edge_data_array;
 
-	ColorConstrainedSimplification(TM aSurface)
+	ColorConstrainedSimplification(TM& aSurface
+		, Custom_stop_predicate& aShould_stop
+//		, VertexIndexMap        const& aVertex_index_map
+//		, VertexPointMap        const& aVertex_point_map
+//		, EdgeIndexMap          const& aEdge_index_map
+		, EdgeIsConstrainedMap& aEdge_is_constrained_map
+//		, CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM> const& aGet_cost
+//		, CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM> const& aGet_placement
+//		, VisitorT              aVisitor
+	)
 		: mSurface(aSurface)
-		, m_has_border(false) {
+		, Should_stop(aShould_stop)
+		, Vertex_index_map(get(boost::vertex_index, mSurface))
+		, Vertex_point_map(get(boost::vertex_point, mSurface))
+		, Edge_index_map(get(boost::halfedge_index, mSurface))
+		, Edge_is_constrained_map(aEdge_is_constrained_map)
+		, Get_cost(CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM>())
+		, Get_placement(CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM>())
+//		, m_has_border(false)
+	{
 		const FT cMaxDihedralAngleCos = std::cos(1.0 * CGAL_PI / 180.0);
 		mcMaxDihedralAngleCos2 = cMaxDihedralAngleCos * cMaxDihedralAngleCos;
+		//Get_cost = CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM>();
+		//Get_placement = CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM>();
+		//Vertex_point_map = get(boost::vertex_point, mSurface);
+		//Edge_index_map = get(boost::halfedge_index, mSurface);
 
 		halfedge_iterator eb, ee;
 		for (boost::tie(eb, ee) = halfedges(mSurface); eb != ee; ++eb) {
@@ -312,10 +347,9 @@ public:
 			if (!equal_points(lProfile.p0(), lProfile.p1())) {
 				Edge_data& lData = get_data(lEdge);
 
-				lData.cost() = Get_cost(lProfile);
+				lData.cost() = get_cost(lProfile);
 				insert_in_PQ(lEdge, lData);
-			}
-			else {
+			} else {
 				zero_length_edges.insert(primary_edge(lEdge));
 			}
 		}
@@ -356,7 +390,7 @@ public:
 			//the placement is trivial, it's always the point itself
 			Placement_type lPlacement = lProfile.p0();
 			vertex_descriptor rResult = halfedge_collapse_bk_compatibility(lProfile.v0_v1(), Edge_is_constrained_map);
-			put(Vertex_point_map, rResult, *lPlacement);
+			boost::put(Vertex_point_map, rResult, *lPlacement);
 		}
 
 		// Pops and processes each edge from the PQ
@@ -374,21 +408,120 @@ public:
 				if (Is_collapse_topologically_valid(lProfile)) {
 					// The external function Get_new_vertex_point() is allowed to return an absent point if there is no way to place the vertex
 					// satisfying its constraints. In that case the remaining vertex is simply left unmoved.
-					Placement_type lPlacement = Get_placement(lProfile);
+					Placement_type lPlacement = get_placement(lProfile);
 
 					if (Is_collapse_geometrically_valid(lProfile, lPlacement)) {
 						Collapse(lProfile, lPlacement);
 					}
-				}
-				else {
+				} else {
 					//Visitor.OnNonCollapsable(lProfile);
 				}
 			}
 		}
 	}
 private:
+	void Collapse(Profile const& aProfile, Placement_type aPlacement) {
+		//Visitor.OnCollapsing(aProfile, aPlacement);
+		--mCurrentEdgeCount;
+
+		// If the top/bottom facets exists, they are removed and the edges v0vt and Q-B along with them.
+		// In that case their corresponding pairs must be pop off the queue
+		if (aProfile.left_face_exists()) {
+			halfedge_descriptor lV0VL = primary_edge(aProfile.vL_v0());
+			if (is_constrained(lV0VL)) //make sure a constrained edge will not disappear
+				lV0VL = primary_edge(aProfile.v1_vL());
+
+			Edge_data& lData = get_data(lV0VL);
+			if (lData.is_in_PQ()) {
+				remove_from_PQ(lV0VL, lData);
+			}
+			--mCurrentEdgeCount;
+		}
+		if (aProfile.right_face_exists()) {
+			halfedge_descriptor lVRV1 = primary_edge(aProfile.vR_v1());
+			if (is_constrained(lVRV1)) //make sure a constrained edge will not disappear
+				lVRV1 = primary_edge(aProfile.v0_vR());
+
+			Edge_data& lData = get_data(lVRV1);
+			if (lData.is_in_PQ()) {
+				remove_from_PQ(lVRV1, lData);
+			}
+			--mCurrentEdgeCount;
+		}
+		// Perform the actual collapse.
+		// This is an external function.
+		// It's REQUIRED to remove ONLY 1 vertex (P or Q) and edges PQ,PT and QB
+		// (PT and QB are removed if they are not null).
+		// All other edges must be kept.
+		// All directed edges incident to vertex removed are relink to the vertex kept.
+		vertex_descriptor rResult = halfedge_collapse_bk_compatibility(aProfile.v0_v1(), Edge_is_constrained_map);
+
+		if (aPlacement) {
+			boost::put(Vertex_point_map, rResult, *aPlacement);
+		}
+		//Visitor.OnCollapsed(aProfile, rResult);
+		Update_neighbors(rResult);
+	}
+
+	void Update_neighbors(vertex_descriptor const& aKeptV) {
+		// (A) Collect all edges to update their cost: all those around each vertex adjacent to the vertex kept
+		typedef std::set<halfedge_descriptor, Compare_id> edges;
+
+		edges lToUpdate(Compare_id(this));
+		edges lToInsert(Compare_id(this));
+
+		// (A.1) Loop around all vertices adjacent to the vertex kept
+		in_edge_iterator eb1, ee1;
+		for (boost::tie(eb1, ee1) = halfedges_around_target(aKeptV, mSurface); eb1 != ee1; ++eb1) {
+			halfedge_descriptor lEdge1 = *eb1;
+			vertex_descriptor lAdj_k = source(lEdge1, mSurface);
+
+			// (A.2) Loop around all edges incident on each adjacent vertex
+			in_edge_iterator eb2, ee2;
+			for (boost::tie(eb2, ee2) = halfedges_around_target(lAdj_k, mSurface); eb2 != ee2; ++eb2) {
+				halfedge_descriptor lEdge2 = primary_edge(*eb2);
+				Edge_data& lData2 = get_data(lEdge2);
+
+				// Only edges still in the PQ needs to be updated, the other needs to be re-inserted
+				if (lData2.is_in_PQ())
+					lToUpdate.insert(lEdge2);
+				else
+					lToInsert.insert(lEdge2);
+			}
+		}
+		// (B) Proceed to update the costs.
+		for (auto it = lToUpdate.begin(), eit = lToUpdate.end(); it != eit; ++it) {
+			halfedge_descriptor lEdge = *it;
+			Edge_data& lData = get_data(lEdge);
+			Profile const& lProfile = create_profile(lEdge);
+			lData.cost() = get_cost(lProfile);
+			update_in_PQ(lEdge, lData);
+		}
+
+		// (C) Insert ignored edges
+		// I think that this should be done for edges eliminated because of the geometric criteria
+		// and not the topological one.However maintaining such a set might be more expensive
+		// and hard to be safe ...
+		for (auto it = lToInsert.begin(), eit = lToInsert.end(); it != eit; ++it) {
+			halfedge_descriptor lEdge = *it;
+			if (is_constrained(lEdge)) continue; //do not insert constrained edges
+			Edge_data& lData = get_data(lEdge);
+			Profile const& lProfile = create_profile(lEdge);
+			lData.cost() = get_cost(lProfile);
+			insert_in_PQ(lEdge, lData);
+		}
+	}
+
 	bool is_primary_edge(halfedge_descriptor const& aEdge) const {
 		return (get_halfedge_id(aEdge) % 2) == 0;
+	}
+
+	Cost_type get_cost(Profile const& aProfile) const {
+		return Get_cost(aProfile, get_placement(aProfile));
+	}
+
+	Placement_type get_placement(Profile const& aProfile) const {
+		return Get_placement(aProfile);
 	}
 
 	halfedge_descriptor primary_edge(halfedge_descriptor const& aEdge) {
@@ -403,7 +536,7 @@ private:
 		return get(Edge_is_constrained_map, edge(aEdge, mSurface));
 	}
 
-	size_type get_halfedge_id(halfedge_descriptor const& aEdge) const{
+	size_type get_halfedge_id(halfedge_descriptor const& aEdge) const {
 		return Edge_index_map[aEdge];
 	}
 
@@ -419,13 +552,17 @@ private:
 		aData.set_PQ_handle(mPQ->push(aEdge));
 	}
 
+	void update_in_PQ(halfedge_descriptor const& aEdge, Edge_data& aData) {
+		aData.set_PQ_handle(mPQ->update(aEdge, aData.PQ_handle()));
+	}
+
 	void remove_from_PQ(halfedge_descriptor const& aEdge, Edge_data& aData) {
 		aData.set_PQ_handle(mPQ->erase(aEdge, aData.PQ_handle()));
 	}
 
 	boost::optional<halfedge_descriptor> pop_from_PQ() {
 		boost::optional<halfedge_descriptor> rEdge = mPQ->extract_top();
-		if (rEdge){
+		if (rEdge) {
 			get_data(*rEdge).reset_PQ_handle();
 		}
 		return rEdge;
@@ -435,11 +572,9 @@ private:
 		bool rR = false;
 
 		in_edge_iterator eb, ee;
-		for (boost::tie(eb, ee) = halfedges_around_target(aV, mSurface); eb != ee; ++eb)
-		{
+		for (boost::tie(eb, ee) = halfedges_around_target(aV, mSurface); eb != ee; ++eb) {
 			halfedge_descriptor lEdge = *eb;
-			if (is_border(lEdge))
-			{
+			if (is_border(lEdge)) {
 				rR = true;
 				break;
 			}
@@ -456,15 +591,14 @@ private:
 		return face(aEdge, mSurface) == boost::graph_traits<TM>::null_face();
 	}
 
-	bool is_constrained(vertex_descriptor const& aV) const
-	{
+	bool is_constrained(vertex_descriptor const& aV) const {
 		in_edge_iterator eb, ee;
 		for (boost::tie(eb, ee) = halfedges_around_target(aV, mSurface); eb != ee; ++eb)
 			if (is_constrained(*eb)) return true;
 		return false;
 	}
 
-	// Some edges are NOT collapseable: doing so would break the topological consistency of the mesh.
+	// Some edges are NOT collapse able: doing so would break the topological consistency of the mesh.
 	// This function returns true if a edge 'p->q' can be collapsed.
 	//
 	// An edge p->q can be collapsed iff it satisfies the "link condition"
@@ -480,8 +614,7 @@ private:
 
 		// Simple tests handling the case of non-manifold situations at a vertex or edge (pinching)
 		// (even if we advertise one should not use a surface mesh with such features)
-		if (aProfile.left_face_exists())
-		{
+		if (aProfile.left_face_exists()) {
 			if (CGAL::is_border(opposite(aProfile.v1_vL(), mSurface), mSurface) &&
 				CGAL::is_border(opposite(aProfile.vL_v0(), mSurface), mSurface)
 				) return false;
@@ -490,34 +623,27 @@ private:
 				CGAL::is_border(opposite(aProfile.vR_v1(), mSurface), mSurface) &&
 				CGAL::is_border(opposite(aProfile.v0_vR(), mSurface), mSurface)
 				) return false;
-		}
-		else {
-			if (aProfile.right_face_exists())
-			{
+		} else {
+			if (aProfile.right_face_exists()) {
 				if (CGAL::is_border(opposite(aProfile.vR_v1(), mSurface), mSurface) &&
 					CGAL::is_border(opposite(aProfile.v0_vR(), mSurface), mSurface)
 					) return false;
-			}
-			else
+			} else
 				return false;
 		}
 
 		// The following loop checks the link condition for v0_v1.
 		// Specifically, that for every vertex 'k' adjacent to both 'p and 'q', 'pkq' is a face of the mesh.
-		for (boost::tie(eb1, ee1) = halfedges_around_source(aProfile.v0(), mSurface); rR && eb1 != ee1; ++eb1)
-		{
+		for (boost::tie(eb1, ee1) = halfedges_around_source(aProfile.v0(), mSurface); rR && eb1 != ee1; ++eb1) {
 			halfedge_descriptor v0_k = *eb1;
 
-			if (v0_k != aProfile.v0_v1())
-			{
+			if (v0_k != aProfile.v0_v1()) {
 				vertex_descriptor k = target(v0_k, mSurface);
 
-				for (boost::tie(eb2, ee2) = halfedges_around_source(k, mSurface); rR && eb2 != ee2; ++eb2)
-				{
+				for (boost::tie(eb2, ee2) = halfedges_around_source(k, mSurface); rR && eb2 != ee2; ++eb2) {
 					halfedge_descriptor k_v1 = *eb2;
 
-					if (target(k_v1, mSurface) == aProfile.v1())
-					{
+					if (target(k_v1, mSurface) == aProfile.v1()) {
 						// At this point we know p-q-k are connected and we need to determine if this triangle is a face of the mesh.
 						//
 						// Since the mesh is known to be triangular there are at most two faces sharing the edge p-q.
@@ -531,8 +657,7 @@ private:
 						bool lIsFace = (aProfile.vL() == k && aProfile.left_face_exists())
 							|| (aProfile.vR() == k && aProfile.right_face_exists());
 
-						if (!lIsFace)
-						{
+						if (!lIsFace) {
 							rR = false;
 							break;
 						}
@@ -541,44 +666,31 @@ private:
 			}
 		}
 
-		if (rR)
-		{
+		if (rR) {
 			// ensure two constrained edges cannot get merged
 			if (is_edge_adjacent_to_a_constrained_edge(aProfile, Edge_is_constrained_map))
 				return false;
 
-			if (aProfile.is_v0_v1_a_border())
-			{
-				if (Is_open_triangle(aProfile.v0_v1()))
-				{
+			if (aProfile.is_v0_v1_a_border()) {
+				if (Is_open_triangle(aProfile.v0_v1())) {
 					rR = false;
 				}
-			}
-			else if (aProfile.is_v1_v0_a_border())
-			{
-				if (Is_open_triangle(aProfile.v1_v0()))
-				{
+			} else if (aProfile.is_v1_v0_a_border()) {
+				if (Is_open_triangle(aProfile.v1_v0())) {
 					rR = false;
 				}
-			}
-			else
-			{
-				if (is_border(aProfile.v0()) && is_border(aProfile.v1()))
-				{
+			} else {
+				if (is_border(aProfile.v0()) && is_border(aProfile.v1())) {
 					rR = false;
-				}
-				else
-				{
-					bool lTetra = Is_tetrahedron(aProfile.v0_v1());
+				} else {
+					bool lTetra = is_tetrahedron(aProfile.v0_v1(), mSurface);
 
-					if (lTetra)
-					{
+					if (lTetra) {
 						rR = false;
 					}
 
 					if (next(aProfile.v0_v1(), mSurface) == opposite(prev(aProfile.v1_v0(), mSurface), mSurface) &&
-						prev(aProfile.v0_v1(), mSurface) == opposite(next(aProfile.v1_v0(), mSurface), mSurface))
-					{
+						prev(aProfile.v0_v1(), mSurface) == opposite(next(aProfile.v1_v0(), mSurface), mSurface)) {
 						return false;
 					}
 				}
@@ -587,20 +699,165 @@ private:
 		return rR;
 	}
 
-	vertex_descriptor halfedge_collapse_bk_compatibility(halfedge_descriptor const& pq, EdgeIsConstrainedMap aEdge_is_constrained_map){
+	halfedge_descriptor find_connection(vertex_descriptor const& v0, vertex_descriptor const& v1) const {
+		out_edge_iterator eb, ee;
+		for (boost::tie(eb, ee) = halfedges_around_source(v0, mSurface); eb != ee; ++eb) {
+			halfedge_descriptor out = *eb;
+			if (target(out, mSurface) == v1)
+				return out;
+		}
+		return halfedge_descriptor();
+	}
+
+	bool Is_collapse_geometrically_valid(Profile const& aProfile, Placement_type k0) {
+		bool rR = true;
+		if (k0) {
+			// Use the current link to extract all local triangles incident to 'vx' in the collapsed mesh (which at this point doesn't exist yet)
+			typedef Profile::vertex_descriptor_vector::const_iterator link_iterator;
+			link_iterator linkb = aProfile.link().begin();
+			link_iterator linke = aProfile.link().end();
+			link_iterator linkl = prev(linke);
+
+			for (link_iterator l = linkb; l != linke && rR; ++l) {
+				link_iterator pv = (l == linkb ? linkl : prev(l));
+				link_iterator nx = (l == linkl ? linkb : next(l));
+
+				// k0,k1 and k3 are three consecutive vertices along the link.
+				vertex_descriptor k1 = *pv;
+				vertex_descriptor k2 = *l;
+				vertex_descriptor k3 = *nx;
+				halfedge_descriptor e12 = find_connection(k1, k2);
+				halfedge_descriptor e23 = k3 != k1 ? find_connection(k2, k3) : halfedge_descriptor();
+
+				// If 'k1-k2-k3' are connected there will be two adjacent triangles 'k0,k1,k2' and 'k0,k2,k3' after the collapse.
+				if (handle_assigned(e12) && handle_assigned(e23)) {
+					if (!are_shared_triangles_valid(*k0, get_point(k1), get_point(k2), get_point(k3))) {
+						rR = false;
+					}
+				}
+
+				if (rR) {
+					// Also check the triangles 'k0,k1,k2' and it's adjacent along e12: 'k4,k2,k1', if exist
+					vertex_descriptor k4 = find_exterior_link_triangle_3rd_vertex(e12, aProfile.v0(), aProfile.v1());
+
+					// There is indeed a triangle shared along e12
+					if (handle_assigned(k4)) {
+						if (!are_shared_triangles_valid(get_point(k1), get_point(k4), get_point(k2), *k0)) {
+							rR = false;
+						}
+					}
+				}
+
+				if (rR) {
+					// And finally, check the triangles 'k0,k2,k3' and it's adjacent e23: 'k5,k3,k2' if exist
+					vertex_descriptor k5 = find_exterior_link_triangle_3rd_vertex(e23, aProfile.v0(), aProfile.v1());
+
+					// There is indeed a triangle shared along e12
+					if (handle_assigned(k5)) {
+						if (!are_shared_triangles_valid(get_point(k2), get_point(k5), get_point(k3), *k0)) {
+							rR = false;
+						}
+					}
+				}
+			}
+		}
+		return rR;
+	}
+
+	bool are_shared_triangles_valid(Point const& p0, Point const& p1, Point const& p2, Point const& p3) const {
+		bool rR = false;
+
+		Vector e01 = Traits().construct_vector_3_object()(p0, p1);
+		Vector e02 = Traits().construct_vector_3_object()(p0, p2);
+		Vector e03 = Traits().construct_vector_3_object()(p0, p3);
+
+		Vector n012 = Traits().construct_cross_product_vector_3_object()(e01, e02);
+		Vector n023 = Traits().construct_cross_product_vector_3_object()(e02, e03);
+
+		FT l012 = Traits().compute_scalar_product_3_object()(n012, n012);
+		FT l023 = Traits().compute_scalar_product_3_object()(n023, n023);
+
+		FT larger = (std::max)(l012, l023);
+		FT smaller = (std::min)(l012, l023);
+
+		const double cMaxAreaRatio = 1e8;
+
+		if (larger < cMaxAreaRatio * smaller) {
+			FT l0123 = Traits().compute_scalar_product_3_object()(n012, n023);
+
+			if (CGAL_NTS is_positive(l0123)) {
+				rR = true;
+			} else {
+				if ((l0123 * l0123) <= mcMaxDihedralAngleCos2 * (l012 * l023)) {
+					rR = true;
+				}
+			}
+		}
+
+		return rR;
+	}
+
+	vertex_descriptor find_exterior_link_triangle_3rd_vertex(halfedge_descriptor const& e, vertex_descriptor const& v0, vertex_descriptor const& v1) const {
+		vertex_descriptor r;
+		if (handle_assigned(e)) {
+			vertex_descriptor ra = target(next(e, mSurface), mSurface);
+			vertex_descriptor rb = source(prev(e, mSurface), mSurface);
+
+			if (ra == rb && ra != v0 && ra != v1) {
+				r = ra;
+			} else {
+				ra = target(next(opposite(e, mSurface), mSurface), mSurface);
+				rb = source(prev(opposite(e, mSurface), mSurface), mSurface);
+
+				if (ra == rb && ra != v0 && ra != v1) {
+					r = ra;
+				}
+			}
+		}
+		return r;
+	}
+
+	template<class Handle>
+	bool handle_assigned(Handle h) const {
+		Handle null;
+		return h != null;
+	}
+
+	boost::property_traits<VertexPointMap>::reference get_point(vertex_descriptor const& aV) const {
+		return get(Vertex_point_map, aV);
+	}
+
+	bool Is_open_triangle(halfedge_descriptor const& h1) {
+		bool rR = false;
+		halfedge_descriptor h2 = next(h1, mSurface);
+		halfedge_descriptor h3 = next(h2, mSurface);
+
+		// First check if it is a triangle 
+		if (next(h3, mSurface) == h1) {
+			rR = is_border(h2) && is_border(h3);
+		}
+
+		return rR;
+	}
+
+	vertex_descriptor halfedge_collapse_bk_compatibility(halfedge_descriptor const& pq, EdgeIsConstrainedMap aEdge_is_constrained_map) {
 		return CGAL::Euler::collapse_edge(edge(pq, mSurface), mSurface, aEdge_is_constrained_map);
 	}
 
-	TM&                  mSurface;
-	ShouldStop           const& Should_stop;
-	boost::associative_property_map<boost::vertex_index_t>       const& Vertex_index_map;
-	VertexPointMap       const& Vertex_point_map;
-	boost::associative_property_map<boost::edge_index_t>         const& Edge_index_map;
-	EdgeIsConstrainedMap const& Edge_is_constrained_map;
-	CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM> const& Get_cost;
-	CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM> const& Get_placement;
-	//VisitorT                    Visitor;
-	bool                        m_has_border;
+	bool is_edge_adjacent_to_a_constrained_edge(Profile const& aProfile, EdgeIsConstrainedMap) {
+		return is_constrained(aProfile.v0()) && is_constrained(aProfile.v1());
+	}
+
+	TM& mSurface;
+	Custom_stop_predicate& Should_stop;
+	CGAL::SM_index_pmap<CGAL::Point_3<CGAL::Epick>, CGAL::SM_Vertex_index>& Vertex_index_map;
+	VertexPointMap& Vertex_point_map;
+	CGAL::SM_index_pmap<CGAL::Point_3<CGAL::Epick>, CGAL::SM_Halfedge_index>& Edge_index_map;
+	EdgeIsConstrainedMap& Edge_is_constrained_map;
+	CGAL::Surface_mesh_simplification::LindstromTurk_cost<TM>& Get_cost;
+	CGAL::Surface_mesh_simplification::LindstromTurk_placement<TM>& Get_placement;
+	//VisitorT Visitor;
+	bool m_has_border;
 	Edge_data_array mEdgeDataArray;
 	boost::scoped_ptr<PQ> mPQ;
 	size_type mInitialEdgeCount;
@@ -664,12 +921,12 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 			+ (bbox.ymax() - bbox.ymin())*(bbox.ymax() - bbox.ymin()) +
 			(bbox.zmax() - bbox.zmin())*(bbox.zmax() - bbox.zmin()));
 
-		ui.m_nb_edges->setValue((int) (num_halfedges(pmesh) / 4));
-		ui.m_nb_edges->setMaximum((int) num_halfedges(pmesh));
+		ui.m_nb_edges->setValue((int)(num_halfedges(pmesh) / 4));
+		ui.m_nb_edges->setMaximum((int)num_halfedges(pmesh));
 		ui.m_edge_length->setValue(diago_length * 0.05);
 		ui.m_color_threshold->setValue(50);
-		
-		bool has_vcolors; 
+
+		bool has_vcolors;
 		bool has_fcolors;
 		FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
 		FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
@@ -744,16 +1001,14 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
 					.get_placement(ConstrainedPlacement(bem))
 					.visitor(visitor));
-			}
-			else {
+			} else {
 				typedef BasePlacement Placement;
 				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
 				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
 					.get_placement(ConstrainedPlacement(bem))
 					.visitor(visitor));
 			}
-		}
-		else if (ui.m_base_placement->currentIndex() == 1) {
+		} else if (ui.m_base_placement->currentIndex() == 1) {
 			typedef SMS::Midpoint_placement<FaceGraph> BasePlacement;
 
 			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
@@ -762,8 +1017,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
 					.get_placement(ConstrainedPlacement(bem))
 					.visitor(visitor));
-			}
-			else {
+			} else {
 				typedef BasePlacement Placement;
 				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
 				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
@@ -788,8 +1042,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		if (poly_item != nullptr) {
 			poly_item->invalidateOpenGLBuffers();
 			poly_item->polyhedron()->collect_garbage();
-		}
-		else {
+		} else {
 			selection_item->polyhedron_item()->polyhedron()->collect_garbage();
 			selection_item->poly_item_changed();
 			selection_item->changed_with_poly_item();
