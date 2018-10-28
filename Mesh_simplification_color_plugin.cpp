@@ -14,7 +14,6 @@
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_length_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/LindstromTurk.h>
-#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Constrained_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Bounded_normal_change_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Midpoint_and_length.h>
 
@@ -23,47 +22,16 @@ namespace SMS = CGAL::Surface_mesh_simplification;
 typedef Scene_surface_mesh_item Scene_facegraph_item;
 typedef Scene_facegraph_item::Face_graph FaceGraph;
 
-class Custom_stop_predicate {
-	bool m_and;
-	SMS::Count_stop_predicate<FaceGraph> m_count_stop;
-	SMS::Edge_length_stop_predicate<double> m_length_stop;
-
-public:
-	Custom_stop_predicate(bool use_and, std::size_t nb_edges, double edge_length)
-		: m_and(use_and),
-		m_count_stop(nb_edges),
-		m_length_stop(edge_length) {
-		std::cout << "\nSimplifying until:" << std::endl
-			<< " * Number of edges = " << nb_edges << std::endl;
-
-		if (edge_length != std::numeric_limits<double>::max()) {
-			std::cout << (use_and ? " AND " : " OR ") << std::endl
-				<< " * Minimum edge length = " << edge_length << std::endl;
-		}
-	}
-
-	template <typename Profile>
-	bool operator() (const double& current_cost, const Profile& edge_profile,
-		std::size_t initial_count, std::size_t current_count) const {
-		if (m_and)
-			return (m_count_stop(current_cost, edge_profile, initial_count, current_count)
-				&& m_length_stop(current_cost, edge_profile, initial_count, current_count));
-		else
-			return (m_count_stop(current_cost, edge_profile, initial_count, current_count)
-				|| m_length_stop(current_cost, edge_profile, initial_count, current_count));
-	}
-};
-
 struct Stats {
 	Stats()
-		: same_color(0),
-		different_color(0),
-		collected(0),
-		processed(0),
-		collapsed(0),
-		non_collapsable(0),
-		cost_uncomputable(0),
-		placement_uncomputable(0) {}
+		: same_color(0)
+		, different_color(0)
+		, collected(0)
+		, processed(0)
+		, collapsed(0)
+		, non_collapsable(0)
+		, cost_uncomputable(0)
+		, placement_uncomputable(0) {}
 
 	std::size_t same_color;
 	std::size_t different_color;
@@ -140,14 +108,14 @@ struct Constrained_edge_map {
 	FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
 	FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
 
-	Constrained_edge_map(const FaceGraph& pmesh, Stats* stats, bool color, bool vcolor, int threshold)
-		: pmesh(pmesh),
-		stats(stats),
-		use_color(color),
-		use_vertex_color(vcolor),
-		has_vcolors(false),
-		has_fcolors(false),
-		threshold(threshold) {
+	Constrained_edge_map(const FaceGraph& pmesh, Stats* stats, bool use_color, bool use_vertex_color, int threshold)
+		: pmesh(pmesh)
+		, stats(stats)
+		, use_color(use_color)
+		, use_vertex_color(use_vertex_color)
+		, has_vcolors(false)
+		, has_fcolors(false)
+		, threshold(threshold) {
 		tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
 		tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
 	}
@@ -180,6 +148,107 @@ struct Constrained_edge_map {
 		int g = c1.green() - c2.green();
 		int b = c1.blue() - c2.blue();
 		return r * r + g * g + b * b > map.threshold*map.threshold;
+	}
+};
+
+template<class EdgeIsConstrainedMap>
+class Custom_placement {
+	bool m_use_bounded_normal_change_placement;
+	bool m_use_lindstrom_turk_placement;
+	EdgeIsConstrainedMap m_edge_is_constrained_map;
+
+public:
+	Custom_placement(EdgeIsConstrainedMap edge_is_constrained_map, bool use_bounded_normal_change_placement, bool use_lindstrom_turk_placement)
+		: m_use_bounded_normal_change_placement(use_bounded_normal_change_placement)
+		, m_use_lindstrom_turk_placement(use_lindstrom_turk_placement)
+		, m_edge_is_constrained_map(edge_is_constrained_map) {}
+
+	template <typename Profile>
+	boost::optional<typename Profile::Point> operator()(Profile const& aProfile) const {
+		if (m_use_lindstrom_turk_placement) {
+			typedef SMS::LindstromTurk_placement<FaceGraph> BasePlacement;
+
+			if (m_use_bounded_normal_change_placement) {
+				return get_constrained_placement<SMS::Bounded_normal_change_placement<BasePlacement>>(aProfile);
+			} else {
+				return get_constrained_placement<BasePlacement>(aProfile);
+			}
+		} else {
+			typedef SMS::Midpoint_placement<FaceGraph> BasePlacement;
+
+			if (m_use_bounded_normal_change_placement) {
+				return get_constrained_placement<SMS::Bounded_normal_change_placement<BasePlacement>>(aProfile);
+			} else {
+				return get_constrained_placement<BasePlacement>(aProfile);
+			}
+		}
+	}
+
+private:
+	template <class BasePlacement, typename Profile>
+	boost::optional<typename Profile::Point> get_constrained_placement(Profile const& aProfile) const {
+		CGAL::Halfedge_around_target_iterator<typename Profile::TM> eb, ee;
+
+		for (boost::tie(eb, ee) = halfedges_around_target(aProfile.v0(), aProfile.surface_mesh()); eb != ee; ++eb) {
+			if (get(m_edge_is_constrained_map, edge(*eb, aProfile.surface_mesh())))
+				return get(aProfile.vertex_point_map(),
+					aProfile.v0());
+		}
+		for (boost::tie(eb, ee) = halfedges_around_target(aProfile.v1(), aProfile.surface_mesh()); eb != ee; ++eb) {
+			if (get(m_edge_is_constrained_map, edge(*eb, aProfile.surface_mesh())))
+				return get(aProfile.vertex_point_map(),
+					aProfile.v1());
+		}
+		return BasePlacement().operator()(aProfile);
+	}
+};
+
+class Custom_cost {
+	bool m_use_lindstrom_turk_cost;
+
+public:
+	Custom_cost(bool use_lindstrom_turk_cost)
+		: m_use_lindstrom_turk_cost(use_lindstrom_turk_cost) {}
+
+	template <typename Profile>
+	boost::optional<typename Profile::FT> operator()(Profile const& aProfile,
+		boost::optional<typename Profile::Point> const& aPlacement) const {
+		if (m_use_lindstrom_turk_cost) {
+			return SMS::LindstromTurk_cost<FaceGraph>()(aProfile, aPlacement);
+		} else {
+			return SMS::Edge_length_cost<FaceGraph>()(aProfile, aPlacement);
+		}
+	}
+};
+
+class Custom_stop_predicate {
+	bool m_and;
+	SMS::Count_stop_predicate<FaceGraph> m_count_stop;
+	SMS::Edge_length_stop_predicate<double> m_length_stop;
+
+public:
+	Custom_stop_predicate(bool use_and, std::size_t nb_edges, double edge_length)
+		: m_and(use_and)
+		, m_count_stop(nb_edges)
+		, m_length_stop(edge_length) {
+		std::cout << "\nSimplifying until:" << std::endl
+			<< " * Number of edges = " << nb_edges << std::endl;
+
+		if (edge_length != std::numeric_limits<double>::max()) {
+			std::cout << (use_and ? " AND " : " OR ") << std::endl
+				<< " * Minimum edge length = " << edge_length << std::endl;
+		}
+	}
+
+	template <typename Profile>
+	bool operator() (const double& current_cost, const Profile& edge_profile,
+		std::size_t initial_count, std::size_t current_count) const {
+		if (m_and)
+			return (m_count_stop(current_cost, edge_profile, initial_count, current_count)
+				&& m_length_stop(current_cost, edge_profile, initial_count, current_count));
+		else
+			return (m_count_stop(current_cost, edge_profile, initial_count, current_count)
+				|| m_length_stop(current_cost, edge_profile, initial_count, current_count));
 	}
 };
 
@@ -285,13 +354,13 @@ public:
 
 	ColorConstrainedSimplification(TM& aSurface
 		, Custom_stop_predicate& aShould_stop
-//		, VertexIndexMap        const& aVertex_index_map
-//		, VertexPointMap        const& aVertex_point_map
-//		, EdgeIndexMap          const& aEdge_index_map
+		//, VertexIndexMap& aVertex_index_map
+		//, VertexPointMap& aVertex_point_map
+		//, EdgeIndexMap& aEdge_index_map
 		, EdgeIsConstrainedMap& aEdge_is_constrained_map
-//		, SMS::LindstromTurk_cost<TM> const& aGet_cost
-//		, SMS::LindstromTurk_placement<TM> const& aGet_placement
-//		, VisitorT              aVisitor
+		, Custom_cost& aGet_cost
+		, Custom_placement<EdgeIsConstrainedMap>& aGet_placement
+		//, VisitorT aVisitor
 	)
 		: mSurface(aSurface)
 		, Should_stop(aShould_stop)
@@ -299,17 +368,11 @@ public:
 		, Vertex_point_map(mSurface.points())
 		, Edge_index_map(get(boost::halfedge_index, mSurface))
 		, Edge_is_constrained_map(aEdge_is_constrained_map)
-		, Get_cost(SMS::LindstromTurk_cost<TM>())
-		, Get_placement(SMS::LindstromTurk_placement<TM>())
-		, m_has_border(false)
-	{
+		, Get_cost(aGet_cost)
+		, Get_placement(aGet_placement)
+		, m_has_border(false) {
 		const FT cMaxDihedralAngleCos = std::cos(1.0 * CGAL_PI / 180.0);
 		mcMaxDihedralAngleCos2 = cMaxDihedralAngleCos * cMaxDihedralAngleCos;
-
-		//Get_cost = SMS::LindstromTurk_cost<TM>();
-		//Get_placement = SMS::LindstromTurk_placement<TM>();
-		//Vertex_index_map = get(boost::vertex_index, mSurface);
-		//Edge_index_map = get(boost::halfedge_index, mSurface);
 
 		halfedge_iterator eb, ee;
 		for (boost::tie(eb, ee) = halfedges(mSurface); eb != ee; ++eb) {
@@ -853,8 +916,8 @@ private:
 	VertexPointMap& Vertex_point_map;
 	CGAL::SM_index_pmap<CGAL::Point_3<CGAL::Epick>, CGAL::SM_Halfedge_index>& Edge_index_map;
 	EdgeIsConstrainedMap& Edge_is_constrained_map;
-	SMS::LindstromTurk_cost<TM>& Get_cost;
-	SMS::LindstromTurk_placement<TM>& Get_placement;
+	Custom_cost& Get_cost;
+	Custom_placement<EdgeIsConstrainedMap>& Get_placement;
 	//VisitorT Visitor;
 	bool m_has_border;
 	Edge_data_array mEdgeDataArray;
@@ -892,6 +955,8 @@ public:
 public Q_SLOTS:
 	void on_actionSimplify_triggered();
 private:
+	void add_face_colors_from_vertex_colors(FaceGraph& pmesh);
+
 	CGAL::Three::Scene_interface *scene;
 	QMainWindow *mw;
 	QList<QAction*> _actions;
@@ -932,41 +997,24 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
 		tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
 
-		if (!has_fcolors && has_vcolors) {
-			std::cout << "\nAdding face colors..." << std::endl;
-			pmesh.add_property_map<face_descriptor, CGAL::Color>("f:color", CGAL::Color(0, 0, 0));
-			tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
-
-			BOOST_FOREACH(FaceGraph::Face_index f, pmesh.faces()) {
-				unsigned int r = 0, g = 0, b = 0;
-				BOOST_FOREACH(FaceGraph::Vertex_index v, CGAL::vertices_around_face(pmesh.halfedge(f), pmesh)) {
-					CGAL::Color c = vcolors[v];
-					r += c.red() * c.red();
-					g += c.green() * c.green();
-					b += c.blue() * c.blue();
-				}
-				CGAL::Color fcolor(
-					static_cast<unsigned char>(sqrt(r / 3)),
-					static_cast<unsigned char>(sqrt(g / 3)),
-					static_cast<unsigned char>(sqrt(b / 3))
-				);
-				fcolors[f] = fcolor;
-			}
-			std::cout << "Face colors were added..." << std::endl;
-		}
-
-		if (has_vcolors)
+		if (has_vcolors) {
 			ui.m_source->addItem("Vertex");
-		if (has_fcolors)
 			ui.m_source->addItem("Face");
-		if (!has_vcolors && !has_fcolors) {
+
+			if (!has_fcolors) {
+				std::cout << "\nAdding face colors from vertex colors..." << std::endl;
+				add_face_colors_from_vertex_colors(pmesh);
+				has_fcolors = true;
+				std::cout << "Face colors were added." << std::endl;
+			}
+		} else if (!has_fcolors) {
 			ui.m_source->setEnabled(false);
 			ui.m_use_source->setChecked(false);
 			ui.m_use_source->setEnabled(false);
 		}
 
-		std::cout << "\nHas vertex color: " << std::boolalpha << has_vcolors << std::endl
-			<< "Has face color: " << has_fcolors << std::endl;
+		std::cout << "\nMesh has vertex color: " << std::boolalpha << has_vcolors << std::endl
+			<< "Mesh has face color: " << has_fcolors << std::endl;
 
 		// check user cancellation
 		if (dialog.exec() == QDialog::Rejected)
@@ -990,30 +1038,15 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 			ui.m_use_nb_edges->isChecked() ? ui.m_nb_edges->value() : 0,
 			ui.m_use_edge_length->isChecked() ? ui.m_edge_length->value() : std::numeric_limits<double>::max()
 		);
-
-		ColorConstrainedSimplification ccs(pmesh, stop, bem);
-
-		if (ui.m_base_placement->currentIndex() == 0) {
-			typedef SMS::LindstromTurk_placement<FaceGraph> BasePlacement;
-
-			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
-				typedef SMS::Bounded_normal_change_placement<BasePlacement> Placement;
-				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-			} else {
-				typedef BasePlacement Placement;
-				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-			}
-		} else if (ui.m_base_placement->currentIndex() == 1) {
-			typedef SMS::Midpoint_placement<FaceGraph> BasePlacement;
-
-			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
-				typedef SMS::Bounded_normal_change_placement<BasePlacement> Placement;
-				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-			} else {
-				typedef BasePlacement Placement;
-				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-			}
-		}
+		Custom_cost cost(
+			ui.m_cost->currentIndex() == 0
+		);
+		Custom_placement<Constrained_edge_map> placement(
+			bem,
+			ui.m_use_bounded_normal_change_placement->isChecked(),
+			ui.m_base_placement->currentIndex() == 0
+		);
+		ColorConstrainedSimplification ccs(pmesh, stop, bem, cost, placement);
 		ccs.simplify();
 
 		if (ui.m_use_source->isChecked()) {
@@ -1040,6 +1073,28 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		}
 		scene->itemChanged(index);
 		QApplication::restoreOverrideCursor();
+	}
+}
+
+void Polyhedron_demo_mesh_simplification_color_plugin::add_face_colors_from_vertex_colors(FaceGraph& pmesh) {
+	pmesh.add_property_map<face_descriptor, CGAL::Color>("f:color", CGAL::Color(0, 0, 0));
+	auto vcolors = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color").first;
+	auto fcolors = pmesh.property_map<face_descriptor, CGAL::Color>("f:color").first;
+
+	BOOST_FOREACH(FaceGraph::Face_index f, pmesh.faces()) {
+		unsigned int r = 0, g = 0, b = 0;
+		BOOST_FOREACH(FaceGraph::Vertex_index v, CGAL::vertices_around_face(pmesh.halfedge(f), pmesh)) {
+			CGAL::Color c = vcolors[v];
+			r += c.red() * c.red();
+			g += c.green() * c.green();
+			b += c.blue() * c.blue();
+		}
+		CGAL::Color fcolor(
+			static_cast<unsigned char>(sqrt(r / 3)),
+			static_cast<unsigned char>(sqrt(g / 3)),
+			static_cast<unsigned char>(sqrt(b / 3))
+		);
+		fcolors[f] = fcolor;
 	}
 }
 #include "Mesh_simplification_color_plugin.moc"

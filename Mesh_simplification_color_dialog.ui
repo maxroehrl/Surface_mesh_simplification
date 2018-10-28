@@ -151,7 +151,7 @@
               </property>
               <item>
                 <property name="text">
-                  <string>LindstromTurk</string>
+                  <string>Lindstrom Turk</string>
                 </property>
               </item>
               <item>
@@ -179,20 +179,27 @@
       <item>
         <layout class="QHBoxLayout" name="horizontalLayout_5">
           <item>
-            <widget class="QCheckBox" name="m_use_source">
-              <property name="checked">
-                <bool>true</bool>
-              </property>
+            <widget class="QLabel">
               <property name="text">
-                <string>Color source:</string>
+                <string>Cost =</string>
               </property>
             </widget>
           </item>
           <item>
-            <widget class="QComboBox" name="m_source">
+            <widget class="QComboBox" name="m_cost">
               <property name="enabled">
                 <bool>true</bool>
               </property>
+              <item>
+                <property name="text">
+                  <string>Lindstrom Turk</string>
+                </property>
+              </item>
+              <item>
+                <property name="text">
+                  <string>Edge length</string>
+                </property>
+              </item>
             </widget>
           </item>
         </layout>
@@ -213,12 +220,43 @@
       <item>
         <layout class="QHBoxLayout" name="horizontalLayout_6">
           <item>
-            <widget class="QCheckBox" name="m_use_color_threshold">
-              <property name="text">
-                <string>Color threshold =</string>
-              </property>
+            <widget class="QCheckBox" name="m_use_source">
               <property name="checked">
                 <bool>true</bool>
+              </property>
+              <property name="text">
+                <string>Color source:</string>
+              </property>
+            </widget>
+          </item>
+          <item>
+            <widget class="QComboBox" name="m_source">
+              <property name="enabled">
+                <bool>true</bool>
+              </property>
+            </widget>
+          </item>
+        </layout>
+      </item>
+      <item>
+        <spacer name="verticalSpacer_4">
+          <property name="orientation">
+            <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+            <size>
+              <width>20</width>
+              <height>40</height>
+            </size>
+          </property>
+        </spacer>
+      </item>
+      <item>
+        <layout class="QHBoxLayout" name="horizontalLayout_7">
+          <item>
+            <widget class="QLabel">
+              <property name="text">
+                <string>Color threshold =</string>
               </property>
             </widget>
           </item>
@@ -235,7 +273,7 @@
         </layout>
       </item>
       <item>
-        <spacer name="verticalSpacer_4">
+        <spacer name="verticalSpacer_5">
           <property name="orientation">
             <enum>Qt::Vertical</enum>
           </property>
