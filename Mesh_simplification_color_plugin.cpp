@@ -43,63 +43,12 @@ struct Stats {
 	std::size_t placement_uncomputable;
 };
 
-struct Visitor : SMS::Edge_collapse_visitor_base<FaceGraph> {
-	typedef GraphTraits::edges_size_type size_type;
-	typedef GraphTraits::vertex_descriptor vertex_descriptor;
-	typedef boost::property_map<FaceGraph, CGAL::vertex_point_t>::type Vertex_point_pmap;
-	typedef SMS::Edge_profile<FaceGraph> Profile;
-	typedef boost::property_traits<Vertex_point_pmap>::value_type Point;
-
-	Stats* stats;
-
-	Visitor(Stats* s) : stats(s) {}
-
-	// Called during the collecting phase for each edge collected.
-	void OnCollected(Profile const&, boost::optional < Kernel::FT > const&) {
-		++stats->collected;
-		//std::cout << "\rEdges collected: " << stats->collected << std::flush;
-	}
-
-	// Called during the processing phase for each edge selected.
-	// If cost is absent the edge won't be collapsed.
-	void OnSelected(Profile const&, boost::optional<Kernel::FT> const& cost,
-		size_type initial, size_type current) {
-		++stats->processed;
-		if (!cost)
-			++stats->cost_uncomputable;
-
-		//if (current == initial)
-		//	return;
-		//std::cout << "\n" << std::flush;
-		//std::cout << "\rEdges remaining: " << current << std::flush;
-	}
-
-	// Called during the processing phase for each edge being collapsed.
-	// If placement is absent the edge is left uncollapsed.
-	void OnCollapsing(Profile const&, boost::optional<Point> const& placement) {
-		if (!placement)
-			++stats->placement_uncomputable;
-	}
-
-	// Called for each edge which failed the so called link-condition,
-	// that is, which cannot be collapsed because doing so would
-	// turn the surface mesh into a non-manifold.
-	void OnNonCollapsable(Profile const&) {
-		++stats->non_collapsable;
-	}
-
-	// Called AFTER each edge has been collapsed
-	void OnCollapsed(Profile const&, vertex_descriptor const&) {
-		++stats->collapsed;
-	}
-};
-
 // BGL property map which indicates whether an edge is marked as non-removable
 struct Constrained_edge_map {
 	typedef boost::graph_traits<FaceGraph>::edge_descriptor key_type;
 
 	const FaceGraph& pmesh;
-	Stats* stats;
+	Stats& stats;
 	bool use_color;
 	bool use_vertex_color;
 	bool has_vcolors;
@@ -108,7 +57,7 @@ struct Constrained_edge_map {
 	FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
 	FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
 
-	Constrained_edge_map(const FaceGraph& pmesh, Stats* stats, bool use_color, bool use_vertex_color, int threshold)
+	Constrained_edge_map(const FaceGraph& pmesh, Stats& stats, bool use_color, bool use_vertex_color, int threshold)
 		: pmesh(pmesh)
 		, stats(stats)
 		, use_color(use_color)
@@ -140,9 +89,9 @@ struct Constrained_edge_map {
 		}
 
 		if (c1 == c2)
-			map.stats->same_color++;
+			map.stats.same_color++;
 		else
-			map.stats->different_color++;
+			map.stats.different_color++;
 
 		int r = c1.red() - c2.red();
 		int g = c1.green() - c2.green();
@@ -285,7 +234,7 @@ public:
 	typedef Constrained_edge_map EdgeIsConstrainedMap;
 
 	struct Compare_id {
-		Compare_id() : mAlgorithm(0) {}
+		Compare_id() : mAlgorithm(nullptr) {}
 
 		Compare_id(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
 
@@ -354,13 +303,10 @@ public:
 
 	ColorConstrainedSimplification(TM& aSurface
 		, Custom_stop_predicate& aShould_stop
-		//, VertexIndexMap& aVertex_index_map
-		//, VertexPointMap& aVertex_point_map
-		//, EdgeIndexMap& aEdge_index_map
 		, EdgeIsConstrainedMap& aEdge_is_constrained_map
 		, Custom_cost& aGet_cost
 		, Custom_placement<EdgeIsConstrainedMap>& aGet_placement
-		//, VisitorT aVisitor
+		, Stats& aStats
 	)
 		: mSurface(aSurface)
 		, Should_stop(aShould_stop)
@@ -370,6 +316,7 @@ public:
 		, Edge_is_constrained_map(aEdge_is_constrained_map)
 		, Get_cost(aGet_cost)
 		, Get_placement(aGet_placement)
+		, stats(aStats)
 		, m_has_border(false) {
 		const FT cMaxDihedralAngleCos = std::cos(1.0 * CGAL_PI / 180.0);
 		mcMaxDihedralAngleCos2 = cMaxDihedralAngleCos * cMaxDihedralAngleCos;
@@ -411,6 +358,7 @@ public:
 
 				lData.cost() = get_cost(lProfile);
 				insert_in_PQ(lEdge, lData);
+				stats.collected++;
 			} else {
 				zero_length_edges.insert(primary_edge(lEdge));
 			}
@@ -453,6 +401,7 @@ public:
 			Placement_type lPlacement = lProfile.p0();
 			vertex_descriptor rResult = halfedge_collapse_bk_compatibility(lProfile.v0_v1(), Edge_is_constrained_map);
 			boost::put(Vertex_point_map, rResult, *lPlacement);
+			stats.collapsed++;
 		}
 
 		// Pops and processes each edge from the PQ
@@ -460,10 +409,13 @@ public:
 		while ((lEdge = pop_from_PQ())) {
 			Profile const& lProfile = create_profile(*lEdge);
 			Cost_type lCost = get_data(*lEdge).cost();
+			stats.processed++;
+
+			if (!lCost)
+				stats.cost_uncomputable++;
 
 			if (lCost) {
 				if (Should_stop(*lCost, lProfile, mInitialEdgeCount, mCurrentEdgeCount)) {
-					//Visitor.OnStopConditionReached(lProfile);
 					break;
 				}
 
@@ -476,14 +428,15 @@ public:
 						Collapse(lProfile, lPlacement);
 					}
 				} else {
-					//Visitor.OnNonCollapsable(lProfile);
+					stats.non_collapsable++;
 				}
 			}
 		}
 	}
 private:
 	void Collapse(Profile const& aProfile, Placement_type aPlacement) {
-		//Visitor.OnCollapsing(aProfile, aPlacement);
+		if (!aPlacement)
+			stats.placement_uncomputable++;
 		--mCurrentEdgeCount;
 
 		// If the top/bottom facets exists, they are removed and the edges v0vt and Q-B along with them.
@@ -521,7 +474,7 @@ private:
 		if (aPlacement) {
 			boost::put(Vertex_point_map, rResult, *aPlacement);
 		}
-		//Visitor.OnCollapsed(aProfile, rResult);
+		stats.collapsed++;
 		Update_neighbors(rResult);
 	}
 
@@ -918,7 +871,7 @@ private:
 	EdgeIsConstrainedMap& Edge_is_constrained_map;
 	Custom_cost& Get_cost;
 	Custom_placement<EdgeIsConstrainedMap>& Get_placement;
-	//VisitorT Visitor;
+	Stats& stats;
 	bool m_has_border;
 	Edge_data_array mEdgeDataArray;
 	boost::scoped_ptr<PQ> mPQ;
@@ -1027,8 +980,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		QApplication::processEvents();
 
 		Stats stats;
-		Visitor visitor(&stats);
-		Constrained_edge_map bem(pmesh, &stats,
+		Constrained_edge_map bem(pmesh, stats,
 			ui.m_use_source->isChecked(),
 			ui.m_source->currentIndex() == 0,
 			ui.m_color_threshold->value()
@@ -1046,7 +998,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 			ui.m_use_bounded_normal_change_placement->isChecked(),
 			ui.m_base_placement->currentIndex() == 0
 		);
-		ColorConstrainedSimplification ccs(pmesh, stop, bem, cost, placement);
+		ColorConstrainedSimplification ccs(pmesh, stop, bem, cost, placement, stats);
 		ccs.simplify();
 
 		if (ui.m_use_source->isChecked()) {
