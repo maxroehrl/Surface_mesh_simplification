@@ -10,11 +10,10 @@
 #include <boost/foreach.hpp>
 
 #include <CGAL/Three/Polyhedron_demo_plugin_interface.h>
-#include <CGAL/Surface_mesh_simplification/HalfedgeGraph_Polyhedron_3.h>
-#include <CGAL/Surface_mesh_simplification/edge_collapse.h>
 #include <CGAL/Surface_mesh_simplification/Edge_collapse_visitor_base.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_length_stop_predicate.h>
+#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/LindstromTurk.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Constrained_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Bounded_normal_change_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Midpoint_and_length.h>
@@ -199,7 +198,6 @@ public:
 	typedef GraphTraits::edges_size_type        size_type;
 	typedef GraphTraits::edge_iterator          edge_iterator;
 
-	
 	typedef boost::lazy_disable_if<boost::is_const<CGAL::Point_3<CGAL::Epick>>, CGAL::internal::
 		Get_vertex_point_map_for_Surface_mesh_return_type<CGAL::Point_3<CGAL::Epick>>>::type VertexPointMap;
 	typedef SMS::Edge_profile<TM, VertexPointMap> Profile;
@@ -298,7 +296,7 @@ public:
 		: mSurface(aSurface)
 		, Should_stop(aShould_stop)
 		, Vertex_index_map(get(boost::vertex_index, mSurface))
-		, Vertex_point_map(get(boost::vertex_point, mSurface))
+		, Vertex_point_map(mSurface.points())
 		, Edge_index_map(get(boost::halfedge_index, mSurface))
 		, Edge_is_constrained_map(aEdge_is_constrained_map)
 		, Get_cost(SMS::LindstromTurk_cost<TM>())
@@ -307,9 +305,10 @@ public:
 	{
 		const FT cMaxDihedralAngleCos = std::cos(1.0 * CGAL_PI / 180.0);
 		mcMaxDihedralAngleCos2 = cMaxDihedralAngleCos * cMaxDihedralAngleCos;
+
 		//Get_cost = SMS::LindstromTurk_cost<TM>();
 		//Get_placement = SMS::LindstromTurk_placement<TM>();
-		//Vertex_point_map = get(boost::vertex_point, mSurface);
+		//Vertex_index_map = get(boost::vertex_index, mSurface);
 		//Edge_index_map = get(boost::halfedge_index, mSurface);
 
 		halfedge_iterator eb, ee;
@@ -992,21 +991,17 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 			ui.m_use_edge_length->isChecked() ? ui.m_edge_length->value() : std::numeric_limits<double>::max()
 		);
 
+		ColorConstrainedSimplification ccs(pmesh, stop, bem);
+
 		if (ui.m_base_placement->currentIndex() == 0) {
 			typedef SMS::LindstromTurk_placement<FaceGraph> BasePlacement;
 
 			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
 				typedef SMS::Bounded_normal_change_placement<BasePlacement> Placement;
 				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
-					.get_placement(ConstrainedPlacement(bem))
-					.visitor(visitor));
 			} else {
 				typedef BasePlacement Placement;
 				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
-					.get_placement(ConstrainedPlacement(bem))
-					.visitor(visitor));
 			}
 		} else if (ui.m_base_placement->currentIndex() == 1) {
 			typedef SMS::Midpoint_placement<FaceGraph> BasePlacement;
@@ -1014,17 +1009,12 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 			if (ui.m_use_bounded_normal_change_placement->isChecked()) {
 				typedef SMS::Bounded_normal_change_placement<BasePlacement> Placement;
 				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
-					.get_placement(ConstrainedPlacement(bem))
-					.visitor(visitor));
 			} else {
 				typedef BasePlacement Placement;
 				typedef SMS::Constrained_placement<Placement, Constrained_edge_map> ConstrainedPlacement;
-				edge_collapse(pmesh, stop, CGAL::parameters::edge_is_constrained_map(bem)
-					.get_placement(ConstrainedPlacement(bem))
-					.visitor(visitor));
 			}
 		}
+		ccs.simplify();
 
 		if (ui.m_use_source->isChecked()) {
 			std::cout << "\nSame color: " << stats.same_color << std::endl
