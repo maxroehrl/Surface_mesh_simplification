@@ -102,39 +102,39 @@ struct Constrained_edge_map {
 template<class EdgeIsConstrainedMap>
 class Custom_placement {
 	bool m_use_bounded_normal_change_placement;
-	bool m_use_lindstrom_turk_placement;
+	SMS::LindstromTurk_params* m_lindstrom_turk_params;
 	EdgeIsConstrainedMap m_edge_is_constrained_map;
 
 public:
-	Custom_placement(EdgeIsConstrainedMap edge_is_constrained_map, bool use_bounded_normal_change_placement, bool use_lindstrom_turk_placement)
+	Custom_placement(EdgeIsConstrainedMap edge_is_constrained_map, bool use_bounded_normal_change_placement, SMS::LindstromTurk_params* lindstrom_turk_params)
 		: m_use_bounded_normal_change_placement(use_bounded_normal_change_placement)
-		, m_use_lindstrom_turk_placement(use_lindstrom_turk_placement)
+		, m_lindstrom_turk_params(lindstrom_turk_params)
 		, m_edge_is_constrained_map(edge_is_constrained_map) {}
 
 	template <typename Profile>
 	boost::optional<typename Profile::Point> operator()(Profile const& aProfile) const {
-		if (m_use_lindstrom_turk_placement) {
+		if (m_lindstrom_turk_params != nullptr) {
 			typedef SMS::LindstromTurk_placement<FaceGraph> BasePlacement;
 
 			if (m_use_bounded_normal_change_placement) {
-				return get_constrained_placement<SMS::Bounded_normal_change_placement<BasePlacement>>(aProfile);
+				return get_constrained_placement(aProfile, SMS::Bounded_normal_change_placement<BasePlacement>(*m_lindstrom_turk_params));
 			} else {
-				return get_constrained_placement<BasePlacement>(aProfile);
+				return get_constrained_placement(aProfile, BasePlacement(*m_lindstrom_turk_params));
 			}
 		} else {
 			typedef SMS::Midpoint_placement<FaceGraph> BasePlacement;
 
 			if (m_use_bounded_normal_change_placement) {
-				return get_constrained_placement<SMS::Bounded_normal_change_placement<BasePlacement>>(aProfile);
+				return get_constrained_placement(aProfile, SMS::Bounded_normal_change_placement<BasePlacement>());
 			} else {
-				return get_constrained_placement<BasePlacement>(aProfile);
+				return get_constrained_placement(aProfile, BasePlacement());
 			}
 		}
 	}
 
 private:
 	template <class BasePlacement, typename Profile>
-	boost::optional<typename Profile::Point> get_constrained_placement(Profile const& aProfile) const {
+	boost::optional<typename Profile::Point> get_constrained_placement(Profile const& aProfile, BasePlacement const& aBasePlacement) const {
 		CGAL::Halfedge_around_target_iterator<typename Profile::TM> eb, ee;
 
 		for (boost::tie(eb, ee) = halfedges_around_target(aProfile.v0(), aProfile.surface_mesh()); eb != ee; ++eb) {
@@ -145,7 +145,7 @@ private:
 			if (get(m_edge_is_constrained_map, edge(*eb, aProfile.surface_mesh())))
 				return get(aProfile.vertex_point_map(), aProfile.v1());
 		}
-		return BasePlacement().operator()(aProfile);
+		return aBasePlacement.operator()(aProfile);
 	}
 };
 
@@ -971,10 +971,15 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 	Custom_cost cost(
 		ui.m_cost->currentIndex() == 0
 	);
+	SMS::LindstromTurk_params params(
+		0.5,
+		0.5,
+		0
+	);
 	Custom_placement<Constrained_edge_map> placement(
 		constrained_edge_map,
 		ui.m_use_bounded_normal_change_placement->isChecked(),
-		ui.m_base_placement->currentIndex() == 0
+		ui.m_base_placement->currentIndex() == 0 ? &params : nullptr
 	);
 	ColorConstrainedSimplification<Constrained_edge_map> ccs(pmesh, stop, constrained_edge_map, cost, placement, stats);
 	ccs.simplify();
