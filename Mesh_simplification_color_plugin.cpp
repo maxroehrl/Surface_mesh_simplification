@@ -1,16 +1,14 @@
 #include "Scene_surface_mesh_item.h"
-#include "Scene_polyhedron_selection_item.h"
 #include "ui_Mesh_simplification_color_dialog.h"
 
 #include <QMainWindow>
-#include <QInputDialog>
 #include <QTime>
 #include <QAction>
 
 #include <boost/foreach.hpp>
 
+#include <CGAL/Kernel_traits.h>
 #include <CGAL/Three/Polyhedron_demo_plugin_interface.h>
-#include <CGAL/Surface_mesh_simplification/Edge_collapse_visitor_base.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Count_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_length_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/LindstromTurk.h>
@@ -19,9 +17,9 @@
 
 namespace SMS = CGAL::Surface_mesh_simplification;
 
-typedef Scene_surface_mesh_item Scene_facegraph_item;
-typedef Scene_facegraph_item::Face_graph FaceGraph;
+typedef Scene_surface_mesh_item::Face_graph FaceGraph;
 
+// Struct containing statistics of the simplification process
 struct Stats {
 	Stats()
 		: same_color(0)
@@ -73,19 +71,19 @@ struct Constrained_edge_map {
 		if (!map.use_color)
 			return false;
 
-		auto v1 = map.pmesh.vertex(edge, 0);
-		auto v2 = map.pmesh.vertex(edge, 1);
+		auto v0 = map.pmesh.vertex(edge, 0);
+		auto v1 = map.pmesh.vertex(edge, 1);
 		CGAL::Color c1;
 		CGAL::Color c2;
 
 		if (map.has_fcolors && !map.use_vertex_color) {
-			auto f1 = map.pmesh.face(map.pmesh.halfedge(v1));
-			auto f2 = map.pmesh.face(map.pmesh.halfedge(v2));
+			auto f1 = map.pmesh.face(map.pmesh.halfedge(v0));
+			auto f2 = map.pmesh.face(map.pmesh.halfedge(v1));
 			c1 = map.fcolors[f1];
 			c2 = map.fcolors[f2];
 		} else if (map.has_vcolors) {
-			c1 = map.vcolors[v1];
-			c2 = map.vcolors[v2];
+			c1 = map.vcolors[v0];
+			c2 = map.vcolors[v1];
 		}
 
 		if (c1 == c2)
@@ -96,7 +94,7 @@ struct Constrained_edge_map {
 		int r = c1.red() - c2.red();
 		int g = c1.green() - c2.green();
 		int b = c1.blue() - c2.blue();
-		return r * r + g * g + b * b > map.threshold*map.threshold;
+		return r * r + g * g + b * b > map.threshold * map.threshold;
 	}
 };
 
@@ -140,13 +138,11 @@ private:
 
 		for (boost::tie(eb, ee) = halfedges_around_target(aProfile.v0(), aProfile.surface_mesh()); eb != ee; ++eb) {
 			if (get(m_edge_is_constrained_map, edge(*eb, aProfile.surface_mesh())))
-				return get(aProfile.vertex_point_map(),
-					aProfile.v0());
+				return get(aProfile.vertex_point_map(), aProfile.v0());
 		}
 		for (boost::tie(eb, ee) = halfedges_around_target(aProfile.v1(), aProfile.surface_mesh()); eb != ee; ++eb) {
 			if (get(m_edge_is_constrained_map, edge(*eb, aProfile.surface_mesh())))
-				return get(aProfile.vertex_point_map(),
-					aProfile.v1());
+				return get(aProfile.vertex_point_map(), aProfile.v1());
 		}
 		return BasePlacement().operator()(aProfile);
 	}
@@ -201,79 +197,70 @@ public:
 	}
 };
 
+// The algorithm for color constrained surface mesh simplification
+template<class EdgeIsConstrainedMap>
 class ColorConstrainedSimplification {
 public:
-	typedef FaceGraph TM;
-
-	typedef boost::graph_traits<TM> GraphTraits;
-	typedef GraphTraits::vertex_descriptor      vertex_descriptor;
-	typedef GraphTraits::vertex_iterator        vertex_iterator;
-	typedef GraphTraits::halfedge_descriptor    halfedge_descriptor;
-	typedef GraphTraits::halfedge_iterator      halfedge_iterator;
-	typedef CGAL::Halfedge_around_source_iterator<TM> out_edge_iterator;
-	typedef CGAL::Halfedge_around_target_iterator<TM> in_edge_iterator;
-	typedef GraphTraits::traversal_category     traversal_category;
-	typedef GraphTraits::edges_size_type        size_type;
-	typedef GraphTraits::edge_iterator          edge_iterator;
-
+	typedef boost::graph_traits<FaceGraph> GraphTraits;
+	typedef GraphTraits::vertex_descriptor vertex_descriptor;
+	typedef GraphTraits::vertex_iterator vertex_iterator;
+	typedef GraphTraits::halfedge_descriptor halfedge_descriptor;
+	typedef GraphTraits::halfedge_iterator halfedge_iterator;
+	typedef GraphTraits::edges_size_type size_type;
+	typedef GraphTraits::edge_iterator edge_iterator;
+	typedef CGAL::Halfedge_around_source_iterator<FaceGraph> out_edge_iterator;
+	typedef CGAL::Halfedge_around_target_iterator<FaceGraph> in_edge_iterator;
 	typedef boost::lazy_disable_if<boost::is_const<CGAL::Point_3<CGAL::Epick>>, CGAL::internal::
-		Get_vertex_point_map_for_Surface_mesh_return_type<CGAL::Point_3<CGAL::Epick>>>::type VertexPointMap;
-	typedef SMS::Edge_profile<TM, VertexPointMap> Profile;
-	typedef VertexPointMap Vertex_point_pmap;
+		Get_vertex_point_map_for_Surface_mesh_return_type<CGAL::Point_3<CGAL::Epick>>>::type Vertex_point_pmap;
+	typedef SMS::Edge_profile<FaceGraph, Vertex_point_pmap> Profile;
 	typedef boost::property_traits<Vertex_point_pmap>::value_type Point;
-
-	typedef Kernel Traits;
+	typedef CGAL::Kernel_traits<Point>::Kernel Traits;
 	typedef Traits::Equal_3 Equal_3;
 	typedef Traits::Vector_3 Vector;
 	typedef Traits::FT FT;
-
 	typedef boost::optional<FT> Cost_type;
 	typedef boost::optional<Point> Placement_type;
-	typedef ColorConstrainedSimplification Self;
-
-	typedef Constrained_edge_map EdgeIsConstrainedMap;
 
 	struct Compare_id {
 		Compare_id() : mAlgorithm(nullptr) {}
 
-		Compare_id(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
+		Compare_id(ColorConstrainedSimplification const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
 
 		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const {
 			return mAlgorithm->get_halfedge_id(a) < mAlgorithm->get_halfedge_id(b);
 		}
 
-		Self const* mAlgorithm;
+		ColorConstrainedSimplification const* mAlgorithm;
 	};
 
 	struct Compare_cost {
 		Compare_cost() : mAlgorithm(nullptr) {}
 
-		Compare_cost(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
+		Compare_cost(ColorConstrainedSimplification const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
 
 		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const {
-			// NOTE: A cost is an optional<> value.
 			// Absent optionals are ordered first; that is, "none < T" and "T > none" for any defined T != none.
 			// In consequence, edges with undefined costs will be promoted to the top of the priority queue and poped out first.
 			return mAlgorithm->get_data(a).cost() < mAlgorithm->get_data(b).cost();
 		}
 
-		Self const* mAlgorithm;
+		ColorConstrainedSimplification const* mAlgorithm;
 	};
 
 	struct edge_id : boost::put_get_helper<size_type, edge_id> {
 		edge_id() : mAlgorithm(nullptr) {}
 
-		edge_id(Self const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
+		edge_id(ColorConstrainedSimplification const* aAlgorithm) : mAlgorithm(aAlgorithm) {}
 
 		size_type operator[] (halfedge_descriptor const& e) const {
 			return mAlgorithm->get_edge_id(e);
 		}
 
-		Self const* mAlgorithm;
+		ColorConstrainedSimplification const* mAlgorithm;
 	};
 
 	typedef CGAL::Modifiable_priority_queue<halfedge_descriptor, Compare_cost, edge_id> PQ;
-	typedef PQ::handle pq_handle;
+	typedef typename PQ::handle pq_handle;
 
 	// An Edge_data is associated with EVERY _ edge in the mesh (collapseable or not).
 	// It relates the edge with the PQ-handle needed to update the priority queue
@@ -298,14 +285,13 @@ public:
 		pq_handle mPQHandle;
 	};
 
-	typedef Edge_data* Edge_data_ptr;
 	typedef boost::scoped_array<Edge_data> Edge_data_array;
 
-	ColorConstrainedSimplification(TM& aSurface
-		, Custom_stop_predicate& aShould_stop
-		, EdgeIsConstrainedMap& aEdge_is_constrained_map
-		, Custom_cost& aGet_cost
-		, Custom_placement<EdgeIsConstrainedMap>& aGet_placement
+	ColorConstrainedSimplification(FaceGraph& aSurface
+		, Custom_stop_predicate const& aShould_stop
+		, EdgeIsConstrainedMap const& aEdge_is_constrained_map
+		, Custom_cost const& aGet_cost
+		, Custom_placement<EdgeIsConstrainedMap> const& aGet_placement
 		, Stats& aStats
 	)
 		: mSurface(aSurface)
@@ -332,28 +318,25 @@ public:
 	}
 
 	void simplify() {
-		// Loop over all the _undirected_ edges in the surface putting them in the PQ
-		Equal_3 equal_points = Traits().equal_3_object();
+		// Loop over all the undirected edges in the surface putting them in the PQ
 		size_type lSize = num_edges(mSurface);
 		mInitialEdgeCount = mCurrentEdgeCount = static_cast<size_type>(
 			std::distance(boost::begin(edges(mSurface)), boost::end(edges(mSurface))));;
 
 		mEdgeDataArray.reset(new Edge_data[lSize]);
-
 		mPQ.reset(new PQ(lSize, Compare_cost(this), edge_id(this)));
 
-		std::size_t id = 0;
 		std::set<halfedge_descriptor> zero_length_edges;
 
 		edge_iterator eb, ee;
-		for (boost::tie(eb, ee) = edges(mSurface); eb != ee; ++eb, id += 2) {
+		for (boost::tie(eb, ee) = edges(mSurface); eb != ee; ++eb) {
 			halfedge_descriptor lEdge = halfedge(*eb, mSurface);
 
 			if (is_constrained(lEdge))
 				continue; //no not insert constrained edges
 
 			Profile const& lProfile = create_profile(lEdge);
-			if (!equal_points(lProfile.p0(), lProfile.p1())) {
+			if (!Traits().equal_3_object()(lProfile.p0(), lProfile.p1())) {
 				Edge_data& lData = get_data(lEdge);
 
 				lData.cost() = get_cost(lProfile);
@@ -382,7 +365,6 @@ public:
 				}
 				--mCurrentEdgeCount;
 			}
-
 			if (lProfile.right_face_exists()) {
 				halfedge_descriptor lEdge_to_remove = is_constrained(lProfile.vR_v1()) ?
 					primary_edge(lProfile.v0_vR()) :
@@ -394,7 +376,6 @@ public:
 				}
 				--mCurrentEdgeCount;
 			}
-
 			--mCurrentEdgeCount;
 
 			//the placement is trivial, it's always the point itself
@@ -437,6 +418,7 @@ private:
 	void Collapse(Profile const& aProfile, Placement_type aPlacement) {
 		if (!aPlacement)
 			stats.placement_uncomputable++;
+
 		--mCurrentEdgeCount;
 
 		// If the top/bottom facets exists, they are removed and the edges v0vt and Q-B along with them.
@@ -519,7 +501,8 @@ private:
 		// and hard to be safe ...
 		for (auto it = lToInsert.begin(), eit = lToInsert.end(); it != eit; ++it) {
 			halfedge_descriptor lEdge = *it;
-			if (is_constrained(lEdge)) continue; //do not insert constrained edges
+			if (is_constrained(lEdge))
+				continue; //do not insert constrained edges
 			Edge_data& lData = get_data(lEdge);
 			Profile const& lProfile = create_profile(lEdge);
 			lData.cost() = get_cost(lProfile);
@@ -528,7 +511,7 @@ private:
 	}
 
 	bool is_primary_edge(halfedge_descriptor const& aEdge) const {
-		return (get_halfedge_id(aEdge) % 2) == 0;
+		return get_halfedge_id(aEdge) % 2 == 0;
 	}
 
 	Cost_type get_cost(Profile const& aProfile) const {
@@ -594,7 +577,6 @@ private:
 				break;
 			}
 		}
-
 		return rR;
 	}
 
@@ -603,13 +585,14 @@ private:
 	}
 
 	bool is_border(halfedge_descriptor const& aEdge) const {
-		return face(aEdge, mSurface) == boost::graph_traits<TM>::null_face();
+		return face(aEdge, mSurface) == boost::graph_traits<FaceGraph>::null_face();
 	}
 
 	bool is_constrained(vertex_descriptor const& aV) const {
 		in_edge_iterator eb, ee;
 		for (boost::tie(eb, ee) = halfedges_around_target(aV, mSurface); eb != ee; ++eb)
-			if (is_constrained(*eb)) return true;
+			if (is_constrained(*eb))
+				return true;
 		return false;
 	}
 
@@ -621,7 +604,6 @@ private:
 	//
 	// The link condition is as follows: for every vertex 'k' adjacent to both 'p and 'q',
 	// "p,k,q" is a facet of the mesh.
-	//
 	bool Is_collapse_topologically_valid(Profile const& aProfile) {
 		bool rR = true;
 		out_edge_iterator eb1, ee1;
@@ -631,18 +613,18 @@ private:
 		// (even if we advertise one should not use a surface mesh with such features)
 		if (aProfile.left_face_exists()) {
 			if (CGAL::is_border(opposite(aProfile.v1_vL(), mSurface), mSurface) &&
-				CGAL::is_border(opposite(aProfile.vL_v0(), mSurface), mSurface)
-				) return false;
+				CGAL::is_border(opposite(aProfile.vL_v0(), mSurface), mSurface))
+				return false;
 
 			if (aProfile.right_face_exists() &&
 				CGAL::is_border(opposite(aProfile.vR_v1(), mSurface), mSurface) &&
-				CGAL::is_border(opposite(aProfile.v0_vR(), mSurface), mSurface)
-				) return false;
+				CGAL::is_border(opposite(aProfile.v0_vR(), mSurface), mSurface))
+				return false;
 		} else {
 			if (aProfile.right_face_exists()) {
 				if (CGAL::is_border(opposite(aProfile.vR_v1(), mSurface), mSurface) &&
-					CGAL::is_border(opposite(aProfile.v0_vR(), mSurface), mSurface)
-					) return false;
+					CGAL::is_border(opposite(aProfile.v0_vR(), mSurface), mSurface))
+					return false;
 			} else
 				return false;
 		}
@@ -669,8 +651,8 @@ private:
 						// If k is either t or b then p-q-k *might* be a face of the mesh. It won't be if k==t but p->q is border
 						// or k==b but q->b is a border (because in that case even though there exists triangles p->q->t (or q->p->b)
 						// they are holes, not faces)
-						bool lIsFace = (aProfile.vL() == k && aProfile.left_face_exists())
-							|| (aProfile.vR() == k && aProfile.right_face_exists());
+						bool lIsFace = aProfile.vL() == k && aProfile.left_face_exists()
+							|| aProfile.vR() == k && aProfile.right_face_exists();
 
 						if (!lIsFace) {
 							rR = false;
@@ -703,7 +685,6 @@ private:
 					if (lTetra) {
 						rR = false;
 					}
-
 					if (next(aProfile.v0_v1(), mSurface) == opposite(prev(aProfile.v1_v0(), mSurface), mSurface) &&
 						prev(aProfile.v0_v1(), mSurface) == opposite(next(aProfile.v1_v0(), mSurface), mSurface)) {
 						return false;
@@ -721,21 +702,20 @@ private:
 			if (target(out, mSurface) == v1)
 				return out;
 		}
-		return halfedge_descriptor();
+		return {};
 	}
 
 	bool Is_collapse_geometrically_valid(Profile const& aProfile, Placement_type k0) {
 		bool rR = true;
 		if (k0) {
 			// Use the current link to extract all local triangles incident to 'vx' in the collapsed mesh (which at this point doesn't exist yet)
-			typedef Profile::vertex_descriptor_vector::const_iterator link_iterator;
-			link_iterator linkb = aProfile.link().begin();
-			link_iterator linke = aProfile.link().end();
-			link_iterator linkl = prev(linke);
+			auto linkb = aProfile.link().begin();
+			auto linke = aProfile.link().end();
+			auto linkl = prev(linke);
 
-			for (link_iterator l = linkb; l != linke && rR; ++l) {
-				link_iterator pv = (l == linkb ? linkl : prev(l));
-				link_iterator nx = (l == linkl ? linkb : next(l));
+			for (auto l = linkb; l != linke && rR; ++l) {
+				auto pv = l == linkb ? linkl : prev(l);
+				auto nx = l == linkl ? linkb : next(l);
 
 				// k0,k1 and k3 are three consecutive vertices along the link.
 				vertex_descriptor k1 = *pv;
@@ -750,7 +730,6 @@ private:
 						rR = false;
 					}
 				}
-
 				if (rR) {
 					// Also check the triangles 'k0,k1,k2' and it's adjacent along e12: 'k4,k2,k1', if exist
 					vertex_descriptor k4 = find_exterior_link_triangle_3rd_vertex(e12, aProfile.v0(), aProfile.v1());
@@ -762,7 +741,6 @@ private:
 						}
 					}
 				}
-
 				if (rR) {
 					// And finally, check the triangles 'k0,k2,k3' and it's adjacent e23: 'k5,k3,k2' if exist
 					vertex_descriptor k5 = find_exterior_link_triangle_3rd_vertex(e23, aProfile.v0(), aProfile.v1());
@@ -800,15 +778,14 @@ private:
 		if (larger < cMaxAreaRatio * smaller) {
 			FT l0123 = Traits().compute_scalar_product_3_object()(n012, n023);
 
-			if (CGAL_NTS is_positive(l0123)) {
+			if (CGAL::is_positive(l0123)) {
 				rR = true;
 			} else {
-				if ((l0123 * l0123) <= mcMaxDihedralAngleCos2 * (l012 * l023)) {
+				if (l0123 * l0123 <= mcMaxDihedralAngleCos2 * (l012 * l023)) {
 					rR = true;
 				}
 			}
 		}
-
 		return rR;
 	}
 
@@ -838,7 +815,7 @@ private:
 		return h != null;
 	}
 
-	boost::property_traits<VertexPointMap>::reference get_point(vertex_descriptor const& aV) const {
+	boost::property_traits<Vertex_point_pmap>::reference get_point(vertex_descriptor const& aV) const {
 		return get(Vertex_point_map, aV);
 	}
 
@@ -851,7 +828,6 @@ private:
 		if (next(h3, mSurface) == h1) {
 			rR = is_border(h2) && is_border(h3);
 		}
-
 		return rR;
 	}
 
@@ -863,14 +839,14 @@ private:
 		return is_constrained(aProfile.v0()) && is_constrained(aProfile.v1());
 	}
 
-	TM& mSurface;
-	Custom_stop_predicate& Should_stop;
-	CGAL::SM_index_pmap<CGAL::Point_3<CGAL::Epick>, CGAL::SM_Vertex_index>& Vertex_index_map;
-	VertexPointMap& Vertex_point_map;
-	CGAL::SM_index_pmap<CGAL::Point_3<CGAL::Epick>, CGAL::SM_Halfedge_index>& Edge_index_map;
-	EdgeIsConstrainedMap& Edge_is_constrained_map;
-	Custom_cost& Get_cost;
-	Custom_placement<EdgeIsConstrainedMap>& Get_placement;
+	FaceGraph& mSurface;
+	Custom_stop_predicate const& Should_stop;
+	CGAL::SM_index_pmap<Point, CGAL::SM_Vertex_index> const& Vertex_index_map;
+	Vertex_point_pmap const& Vertex_point_map;
+	CGAL::SM_index_pmap<Point, CGAL::SM_Halfedge_index> const& Edge_index_map;
+	EdgeIsConstrainedMap const& Edge_is_constrained_map;
+	Custom_cost const& Get_cost;
+	Custom_placement<EdgeIsConstrainedMap> const& Get_placement;
 	Stats& stats;
 	bool m_has_border;
 	Edge_data_array mEdgeDataArray;
@@ -902,8 +878,7 @@ public:
 	}
 
 	bool applicable(QAction*) const override {
-		return qobject_cast<Scene_facegraph_item*>(scene->item(scene->mainSelectionIndex()))
-			|| qobject_cast<Scene_polyhedron_selection_item*>(scene->item(scene->mainSelectionIndex()));
+		return qobject_cast<Scene_surface_mesh_item*>(scene->item(scene->mainSelectionIndex()));
 	}
 public Q_SLOTS:
 	void on_actionSimplify_triggered();
@@ -918,114 +893,107 @@ private:
 
 void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_triggered() {
 	const int index = scene->mainSelectionIndex();
-	auto poly_item = qobject_cast<Scene_facegraph_item*>(scene->item(index));
-	auto selection_item = qobject_cast<Scene_polyhedron_selection_item*>(scene->item(index));
+	auto poly_item = qobject_cast<Scene_surface_mesh_item*>(scene->item(index));
 
-	if (poly_item || selection_item) {
-		FaceGraph& pmesh = poly_item != nullptr ? *poly_item->polyhedron() : *selection_item->polyhedron();
+	if (!poly_item)
+		return;
 
-		// get option
-		QDialog dialog(mw);
-		Ui::Mesh_simplification_color_dialog ui;
-		ui.setupUi(&dialog);
-		connect(ui.buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
-		connect(ui.buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
+	FaceGraph& pmesh = *poly_item->polyhedron();
 
-		auto bbox = poly_item != nullptr ? poly_item->bbox()
-			: selection_item != nullptr ? selection_item->bbox() : scene->bbox();
+	// Make the option dialog
+	QDialog dialog(mw, Qt::WindowSystemMenuHint | Qt::WindowTitleHint);
+	Ui::Mesh_simplification_color_dialog ui;
+	ui.setupUi(&dialog);
+	connect(ui.buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
+	connect(ui.buttonBox, SIGNAL(rejected()), &dialog, SLOT(reject()));
 
-		double diago_length = CGAL::sqrt((bbox.xmax() - bbox.xmin())*(bbox.xmax() - bbox.xmin())
-			+ (bbox.ymax() - bbox.ymin())*(bbox.ymax() - bbox.ymin()) +
-			(bbox.zmax() - bbox.zmin())*(bbox.zmax() - bbox.zmin()));
+	Scene_surface_mesh_item::Bbox bbox = poly_item->bbox();
+	const double diagonal_length = CGAL::sqrt((bbox.xmax() - bbox.xmin())*(bbox.xmax() - bbox.xmin())
+		+ (bbox.ymax() - bbox.ymin())*(bbox.ymax() - bbox.ymin()) +
+		(bbox.zmax() - bbox.zmin())*(bbox.zmax() - bbox.zmin()));
 
-		ui.m_nb_edges->setValue((int)(num_halfedges(pmesh) / 4));
-		ui.m_nb_edges->setMaximum((int)num_halfedges(pmesh));
-		ui.m_edge_length->setValue(diago_length * 0.05);
-		ui.m_color_threshold->setValue(50);
+	ui.m_nb_edges->setValue((int)(num_halfedges(pmesh) / 4));
+	ui.m_nb_edges->setMaximum((int)num_halfedges(pmesh));
+	ui.m_edge_length->setValue(diagonal_length * 0.05);
+	ui.m_color_threshold->setValue(50);
 
-		bool has_vcolors;
-		bool has_fcolors;
-		FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
-		FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
-		tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
-		tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
+	// Check which color maps the mesh has
+	bool has_vcolors;
+	bool has_fcolors;
+	FaceGraph::Property_map<vertex_descriptor, CGAL::Color> vcolors;
+	FaceGraph::Property_map<face_descriptor, CGAL::Color> fcolors;
+	tie(vcolors, has_vcolors) = pmesh.property_map<vertex_descriptor, CGAL::Color>("v:color");
+	tie(fcolors, has_fcolors) = pmesh.property_map<face_descriptor, CGAL::Color>("f:color");
 
-		if (has_vcolors) {
-			ui.m_source->addItem("Vertex");
-			ui.m_source->addItem("Face");
+	if (has_vcolors) {
+		ui.m_source->addItem("Vertex");
+		ui.m_source->addItem("Face");
 
-			if (!has_fcolors) {
-				std::cout << "\nAdding face colors from vertex colors..." << std::endl;
-				add_face_colors_from_vertex_colors(pmesh);
-				has_fcolors = true;
-				std::cout << "Face colors were added." << std::endl;
-			}
-		} else if (!has_fcolors) {
-			ui.m_source->setEnabled(false);
-			ui.m_use_source->setChecked(false);
-			ui.m_use_source->setEnabled(false);
-		}
-
-		std::cout << "\nMesh has vertex color: " << std::boolalpha << has_vcolors << std::endl
-			<< "Mesh has face color: " << has_fcolors << std::endl;
-
-		// check user cancellation
-		if (dialog.exec() == QDialog::Rejected)
-			return;
-
-		// simplify
-		QTime time;
-		time.start();
-		QApplication::setOverrideCursor(Qt::WaitCursor);
-		QApplication::processEvents();
-
-		Stats stats;
-		Constrained_edge_map bem(pmesh, stats,
-			ui.m_use_source->isChecked(),
-			ui.m_source->currentIndex() == 0,
-			ui.m_color_threshold->value()
-		);
-		Custom_stop_predicate stop(
-			ui.m_combinatorial->currentIndex() == 0 && !ui.m_use_nb_edges->isChecked() && !ui.m_use_edge_length->isChecked(),
-			ui.m_use_nb_edges->isChecked() ? ui.m_nb_edges->value() : 0,
-			ui.m_use_edge_length->isChecked() ? ui.m_edge_length->value() : std::numeric_limits<double>::max()
-		);
-		Custom_cost cost(
-			ui.m_cost->currentIndex() == 0
-		);
-		Custom_placement<Constrained_edge_map> placement(
-			bem,
-			ui.m_use_bounded_normal_change_placement->isChecked(),
-			ui.m_base_placement->currentIndex() == 0
-		);
-		ColorConstrainedSimplification ccs(pmesh, stop, bem, cost, placement, stats);
-		ccs.simplify();
-
-		if (ui.m_use_source->isChecked()) {
-			std::cout << "\nSame color: " << stats.same_color << std::endl
-				<< "Different color: " << stats.different_color << std::endl;
-		}
-		std::cout << "\nEdges collected: " << stats.collected << std::endl
-			<< "Edges processed: " << stats.processed << std::endl
-			<< "Edges collapsed: " << stats.collapsed << std::endl
-			<< "Edges not collapsed due to topological constraints: " << stats.non_collapsable << std::endl
-			<< "Edge not collapsed due to cost computation constraints: " << stats.cost_uncomputable << std::endl
-			<< "Edge not collapsed due to placement computation constraints: " << stats.placement_uncomputable << std::endl
-			<< "Time elapsed: " << time.elapsed() << " ms" << std::endl;
-
-		// update scene
-		if (poly_item != nullptr) {
+		// Add face colors from vertex colors
+		if (!has_fcolors) {
+			std::cout << "\nAdding face colors from vertex colors..." << std::endl;
+			add_face_colors_from_vertex_colors(pmesh);
+			has_fcolors = true;
+			std::cout << "Face colors were added." << std::endl;
 			poly_item->invalidateOpenGLBuffers();
-			poly_item->polyhedron()->collect_garbage();
-		} else {
-			selection_item->polyhedron_item()->polyhedron()->collect_garbage();
-			selection_item->poly_item_changed();
-			selection_item->changed_with_poly_item();
-			selection_item->invalidateOpenGLBuffers();
 		}
-		scene->itemChanged(index);
-		QApplication::restoreOverrideCursor();
+	} else if (!has_fcolors) {
+		ui.m_source->setEnabled(false);
+		ui.m_use_source->setChecked(false);
+		ui.m_use_source->setEnabled(false);
 	}
+
+	std::cout << "\nMesh has vertex color: " << std::boolalpha << has_vcolors << std::endl
+		<< "Mesh has face color: " << has_fcolors << std::endl;
+
+	// Check user cancellation
+	if (dialog.exec() == QDialog::Rejected)
+		return;
+
+	// Start the simplification
+	QTime time;
+	time.start();
+	QApplication::setOverrideCursor(Qt::WaitCursor);
+	QApplication::processEvents();
+
+	Stats stats;
+	Constrained_edge_map constrained_edge_map(pmesh, stats,
+		ui.m_use_source->isChecked(),
+		ui.m_source->currentIndex() == 0,
+		ui.m_color_threshold->value()
+	);
+	Custom_stop_predicate stop(
+		ui.m_combinatorial->currentIndex() == 0 && !ui.m_use_nb_edges->isChecked() && !ui.m_use_edge_length->isChecked(),
+		ui.m_use_nb_edges->isChecked() ? ui.m_nb_edges->value() : 0,
+		ui.m_use_edge_length->isChecked() ? ui.m_edge_length->value() : std::numeric_limits<double>::max()
+	);
+	Custom_cost cost(
+		ui.m_cost->currentIndex() == 0
+	);
+	Custom_placement<Constrained_edge_map> placement(
+		constrained_edge_map,
+		ui.m_use_bounded_normal_change_placement->isChecked(),
+		ui.m_base_placement->currentIndex() == 0
+	);
+	ColorConstrainedSimplification<Constrained_edge_map> ccs(pmesh, stop, constrained_edge_map, cost, placement, stats);
+	ccs.simplify();
+
+	if (ui.m_use_source->isChecked()) {
+		std::cout << "\nSame color: " << stats.same_color << std::endl
+			<< "Different color: " << stats.different_color << std::endl;
+	}
+	std::cout << "\nEdges collected: " << stats.collected << std::endl
+		<< "Edges processed: " << stats.processed << std::endl
+		<< "Edges collapsed: " << stats.collapsed << std::endl
+		<< "Edges not collapsed due to topological constraints: " << stats.non_collapsable << std::endl
+		<< "Edge not collapsed due to cost computation constraints: " << stats.cost_uncomputable << std::endl
+		<< "Edge not collapsed due to placement computation constraints: " << stats.placement_uncomputable << std::endl
+		<< "Time elapsed: " << time.elapsed() << " ms" << std::endl;
+
+	poly_item->invalidateOpenGLBuffers();
+	poly_item->polyhedron()->collect_garbage();
+	scene->itemChanged(index);
+	QApplication::restoreOverrideCursor();
 }
 
 void Polyhedron_demo_mesh_simplification_color_plugin::add_face_colors_from_vertex_colors(FaceGraph& pmesh) {
