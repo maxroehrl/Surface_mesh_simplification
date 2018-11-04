@@ -14,6 +14,7 @@
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/LindstromTurk.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Bounded_normal_change_placement.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Midpoint_and_length.h>
+#include <Messages_interface.h>
 
 namespace SMS = CGAL::Surface_mesh_simplification;
 
@@ -868,9 +869,10 @@ public:
 		return _actions;
 	}
 
-	void init(QMainWindow* mainWindow, CGAL::Three::Scene_interface* scene_interface, Messages_interface*) override {
+	void init(QMainWindow* mainWindow, CGAL::Three::Scene_interface* scene_interface, Messages_interface* messages_interface) override {
 		mw = mainWindow;
 		scene = scene_interface;
+		messages = messages_interface;
 		QAction *actionSimplify = new QAction("Color Constrained Simplification", mw);
 		actionSimplify->setProperty("subMenuName", "Triangulated Surface Mesh Simplification");
 		connect(actionSimplify, SIGNAL(triggered()), this, SLOT(on_actionSimplify_triggered()));
@@ -888,7 +890,7 @@ private:
 	CGAL::Three::Scene_interface *scene;
 	QMainWindow *mw;
 	QList<QAction*> _actions;
-
+	Messages_interface* messages;
 }; // end Polyhedron_demo_mesh_simplification_color_plugin
 
 void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_triggered() {
@@ -901,7 +903,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 	FaceGraph& pmesh = *poly_item->polyhedron();
 
 	// Make the option dialog
-	QDialog dialog(mw, Qt::WindowSystemMenuHint | Qt::WindowTitleHint);
+	QDialog dialog(mw, Qt::WindowSystemMenuHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 	Ui::Mesh_simplification_color_dialog ui;
 	ui.setupUi(&dialog);
 	connect(ui.buttonBox, SIGNAL(accepted()), &dialog, SLOT(accept()));
@@ -942,7 +944,6 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		ui.m_use_source->setChecked(false);
 		ui.m_use_source->setEnabled(false);
 	}
-
 	std::cout << "\nMesh has vertex color: " << std::boolalpha << has_vcolors << std::endl
 		<< "Mesh has face color: " << has_fcolors << std::endl;
 
@@ -989,6 +990,7 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 		<< "Edge not collapsed due to cost computation constraints: " << stats.cost_uncomputable << std::endl
 		<< "Edge not collapsed due to placement computation constraints: " << stats.placement_uncomputable << std::endl
 		<< "Time elapsed: " << time.elapsed() << " ms" << std::endl;
+	messages->information(tr("Time elapsed for simplification: ").append(std::to_string(time.elapsed()).c_str()).append("ms"));
 
 	poly_item->invalidateOpenGLBuffers();
 	poly_item->polyhedron()->collect_garbage();
