@@ -393,14 +393,12 @@ public:
 			Cost_type lCost = get_data(*lEdge).cost();
 			stats.processed++;
 
-			if (!lCost)
+			if (!lCost) {
 				stats.cost_uncomputable++;
-
-			if (lCost) {
+			} else {
 				if (Should_stop(*lCost, lProfile, mInitialEdgeCount, mCurrentEdgeCount)) {
 					break;
 				}
-
 				if (Is_collapse_topologically_valid(lProfile)) {
 					// The external function Get_new_vertex_point() is allowed to return an absent point if there is no way to place the vertex
 					// satisfying its constraints. In that case the remaining vertex is simply left unmoved.
@@ -771,8 +769,8 @@ private:
 		FT l012 = Traits().compute_scalar_product_3_object()(n012, n012);
 		FT l023 = Traits().compute_scalar_product_3_object()(n023, n023);
 
-		FT larger = (std::max)(l012, l023);
-		FT smaller = (std::min)(l012, l023);
+		FT larger = std::max(l012, l023);
+		FT smaller = std::min(l012, l023);
 
 		const double cMaxAreaRatio = 1e8;
 
@@ -781,10 +779,8 @@ private:
 
 			if (CGAL::is_positive(l0123)) {
 				rR = true;
-			} else {
-				if (l0123 * l0123 <= mcMaxDihedralAngleCos2 * (l012 * l023)) {
-					rR = true;
-				}
+			} else if (l0123 * l0123 <= mcMaxDihedralAngleCos2 * (l012 * l023)) {
+				rR = true;
 			}
 		}
 		return rR;
