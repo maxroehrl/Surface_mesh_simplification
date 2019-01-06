@@ -28,7 +28,8 @@ struct Stats {
 		, collected(0)
 		, processed(0)
 		, collapsed(0)
-		, non_collapsable(0)
+		, non_collapsable_top(0)
+		, non_collapsable_geo(0)
 		, cost_uncomputable(0)
 		, placement_uncomputable(0) {}
 
@@ -37,7 +38,8 @@ struct Stats {
 	std::size_t collected;
 	std::size_t processed;
 	std::size_t collapsed;
-	std::size_t non_collapsable;
+	std::size_t non_collapsable_top;
+	std::size_t non_collapsable_geo;
 	std::size_t cost_uncomputable;
 	std::size_t placement_uncomputable;
 };
@@ -241,7 +243,7 @@ public:
 
 		bool operator() (halfedge_descriptor const& a, halfedge_descriptor const& b) const {
 			// Absent optionals are ordered first; that is, "none < T" and "T > none" for any defined T != none.
-			// In consequence, edges with undefined costs will be promoted to the top of the priority queue and poped out first.
+			// In consequence, edges with undefined costs will be promoted to the top of the priority queue and popped out first.
 			return mAlgorithm->get_data(a).cost() < mAlgorithm->get_data(b).cost();
 		}
 
@@ -263,7 +265,7 @@ public:
 	typedef CGAL::Modifiable_priority_queue<halfedge_descriptor, Compare_cost, edge_id> PQ;
 	typedef typename PQ::handle pq_handle;
 
-	// An Edge_data is associated with EVERY _ edge in the mesh (collapseable or not).
+	// An Edge_data is associated with every edge in the mesh (collapseable or not).
 	// It relates the edge with the PQ-handle needed to update the priority queue
 	// It also relates the edge with a policy-based cache
 	class Edge_data {
@@ -326,6 +328,7 @@ public:
 
 		mEdgeDataArray.reset(new Edge_data[lSize]);
 		mPQ.reset(new PQ(lSize, Compare_cost(this), edge_id(this)));
+		std::cout << std::endl;
 
 		std::set<halfedge_descriptor> zero_length_edges;
 
@@ -334,7 +337,7 @@ public:
 			halfedge_descriptor lEdge = halfedge(*eb, mSurface);
 
 			if (is_constrained(lEdge))
-				continue; //no not insert constrained edges
+				continue; // no not insert constrained edges
 
 			Profile const& lProfile = create_profile(lEdge);
 			if (!Traits().equal_3_object()(lProfile.p0(), lProfile.p1())) {
@@ -343,10 +346,14 @@ public:
 				lData.cost() = get_cost(lProfile);
 				insert_in_PQ(lEdge, lData);
 				stats.collected++;
+				if (stats.collected % 50000 == 0) {
+					std::cout << "\rCollected edges: " << stats.collected << std::flush;
+				}
 			} else {
 				zero_length_edges.insert(primary_edge(lEdge));
 			}
 		}
+		std::cout << std::endl;
 
 		for (auto it = zero_length_edges.begin(), it_end = zero_length_edges.end(); it != it_end; ++it) {
 			Profile const& lProfile = create_profile(*it);
@@ -379,13 +386,16 @@ public:
 			}
 			--mCurrentEdgeCount;
 
-			//the placement is trivial, it's always the point itself
+			// the placement is trivial, it's always the point itself
 			Placement_type lPlacement = lProfile.p0();
 			vertex_descriptor rResult = halfedge_collapse_bk_compatibility(lProfile.v0_v1(), Edge_is_constrained_map);
 			boost::put(Vertex_point_map, rResult, *lPlacement);
 			stats.collapsed++;
 		}
 
+		std::size_t counter = 0;
+		bool act = false;
+		size_type old = mCurrentEdgeCount;
 		// Pops and processes each edge from the PQ
 		boost::optional<halfedge_descriptor> lEdge;
 		while ((lEdge = pop_from_PQ())) {
@@ -406,12 +416,26 @@ public:
 
 					if (Is_collapse_geometrically_valid(lProfile, lPlacement)) {
 						Collapse(lProfile, lPlacement);
+						act = true;
+					} else {
+						stats.non_collapsable_geo++;
 					}
 				} else {
-					stats.non_collapsable++;
+					stats.non_collapsable_top++;
 				}
 			}
+			if (act && old == mCurrentEdgeCount) {
+				counter++;
+				if (counter >= 10000u) {
+					std::cout << "\nHang! current edges: " << old << std::endl;
+					break;
+				}
+			} else {
+				counter = 0;
+			}
+			old = mCurrentEdgeCount;
 		}
+		std::cout << std::endl;
 	}
 private:
 	void Collapse(Profile const& aProfile, Placement_type aPlacement) {
@@ -435,7 +459,7 @@ private:
 		}
 		if (aProfile.right_face_exists()) {
 			halfedge_descriptor lVRV1 = primary_edge(aProfile.vR_v1());
-			if (is_constrained(lVRV1)) //make sure a constrained edge will not disappear
+			if (is_constrained(lVRV1)) // make sure a constrained edge will not disappear
 				lVRV1 = primary_edge(aProfile.v0_vR());
 
 			Edge_data& lData = get_data(lVRV1);
@@ -456,6 +480,9 @@ private:
 			boost::put(Vertex_point_map, rResult, *aPlacement);
 		}
 		stats.collapsed++;
+		if (stats.collapsed % 10000 == 0) {
+			std::cout << "\rCurrent edge count: " << mCurrentEdgeCount << std::flush;
+		}
 		Update_neighbors(rResult);
 	}
 
@@ -501,7 +528,7 @@ private:
 		for (auto it = lToInsert.begin(), eit = lToInsert.end(); it != eit; ++it) {
 			halfedge_descriptor lEdge = *it;
 			if (is_constrained(lEdge))
-				continue; //do not insert constrained edges
+				continue; // do not insert constrained edges
 			Edge_data& lData = get_data(lEdge);
 			Profile const& lProfile = create_profile(lEdge);
 			lData.cost() = get_cost(lProfile);
@@ -981,13 +1008,14 @@ void Polyhedron_demo_mesh_simplification_color_plugin::on_actionSimplify_trigger
 	ccs.simplify();
 
 	if (ui.m_use_source->isChecked()) {
-		std::cout << "\nSame color: " << stats.same_color << std::endl
-			<< "Different color: " << stats.different_color << std::endl;
+		std::cout << "\nSame color calls: " << stats.same_color << std::endl
+			<< "Different color calls: " << stats.different_color << std::endl;
 	}
 	std::cout << "\nEdges collected: " << stats.collected << std::endl
 		<< "Edges processed: " << stats.processed << std::endl
 		<< "Edges collapsed: " << stats.collapsed << std::endl
-		<< "Edges not collapsed due to topological constraints: " << stats.non_collapsable << std::endl
+		<< "Edges not collapsed due to topological constraints: " << stats.non_collapsable_top << std::endl
+		<< "Edges not collapsed due to geometrical constraints: " << stats.non_collapsable_geo << std::endl
 		<< "Edge not collapsed due to cost computation constraints: " << stats.cost_uncomputable << std::endl
 		<< "Edge not collapsed due to placement computation constraints: " << stats.placement_uncomputable << std::endl
 		<< "Time elapsed: " << time.elapsed() << " ms" << std::endl;
