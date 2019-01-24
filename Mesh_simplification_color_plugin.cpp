@@ -353,7 +353,7 @@ public:
 				zero_length_edges.insert(primary_edge(lEdge));
 			}
 		}
-		std::cout << std::endl;
+		std::cout << "\rCollected edges: " << stats.collected << std::endl;
 
 		for (auto it = zero_length_edges.begin(), it_end = zero_length_edges.end(); it != it_end; ++it) {
 			Profile const& lProfile = create_profile(*it);
@@ -393,9 +393,6 @@ public:
 			stats.collapsed++;
 		}
 
-		std::size_t counter = 0;
-		bool act = false;
-		size_type old = mCurrentEdgeCount;
 		// Pops and processes each edge from the PQ
 		boost::optional<halfedge_descriptor> lEdge;
 		while ((lEdge = pop_from_PQ())) {
@@ -416,7 +413,6 @@ public:
 
 					if (Is_collapse_geometrically_valid(lProfile, lPlacement)) {
 						Collapse(lProfile, lPlacement);
-						act = true;
 					} else {
 						stats.non_collapsable_geo++;
 					}
@@ -424,18 +420,8 @@ public:
 					stats.non_collapsable_top++;
 				}
 			}
-			if (act && old == mCurrentEdgeCount) {
-				counter++;
-				if (counter >= 10000u) {
-					std::cout << "\nHang! current edges: " << old << std::endl;
-					break;
-				}
-			} else {
-				counter = 0;
-			}
-			old = mCurrentEdgeCount;
 		}
-		std::cout << std::endl;
+		std::cout << "\rCurrent edge count: " << mCurrentEdgeCount << std::endl;
 	}
 private:
 	void Collapse(Profile const& aProfile, Placement_type aPlacement) {
